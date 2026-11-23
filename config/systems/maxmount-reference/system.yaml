@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Reference system: custom alt-az mount, Raspberry Pi 4, two Technosoft iPOS4808 BX-CAT drives.
+# DRAFT: limits below are placeholders until inertia, torque and cable wrap are measured.
+system: maxmount-reference
+kinematics: altaz_over_the_top
+
+fieldbus:
+  backend: soem
+  interface: eth0
+  cycle_us: 1000
+
+realtime:
+  cpu: 3
+  priority: 80
+  command_lead_us: 1000
+
+time:
+  pps_device: /dev/pps0      # GNSS module with PPS on a GPIO pin
+  max_clock_error_us: 10     # refuse satellite passes above this
+
+axes:
+  - name: az
+    drive: technosoft_ipos4808_bx_cat
+    bus_position: 0
+    mechanics: Aerotech ADRT-150-115 direct drive, sin/cos encoder + Halls
+    counts_per_rev: null     # TODO: encoder line count x drive interpolation
+    limits:                  # cable wrap set by through-axis USB and Ethernet cables
+      min_deg: -270
+      max_deg: 270
+      max_vel_deg_s: 30
+      max_acc_deg_s2: 20
+
+  - name: el
+    drive: technosoft_ipos4808_bx_cat
+    bus_position: 1
+    mechanics: Teknic Hudson M-2321P + Bell-Everman ServoBelt; Renishaw RGH41 + REE2000 load encoder (dual loop)
+    counts_per_rev: null     # TODO: 2*pi*r / (tape pitch / interpolation)
+    limits:
+      min_deg: -45           # mechanical; the horizon mask limits observing
+      max_deg: 180           # through zenith to the opposite horizon
+      max_vel_deg_s: 10
+      max_acc_deg_s2: 10
+
+cameras:
+  widefield: {type: gige, interface: usb-ethernet}
+  narrow: {type: zwo, interface: usb3, telescope: Celestron C8}

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Drive descriptor for the built-in simulated CiA 402 servo drive.
+descriptor_version: 1
+vendor: maxmount
+model: simulated CSP servo
+profile: cia402
+modes: [csp]
+capabilities:
+  velocity_offset: supported
+  torque_offset: ignored
+units:
+  velocity: counts_per_second
+sim:
+  kp_per_s: 400
+  velocity_tau_s: 0.002
+  servo_substeps: 10
+  following_error_limit_counts: 200000

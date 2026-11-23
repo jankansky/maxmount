@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Fully simulated alt-az mount: runs anywhere, used for development and CI.
+system: sim-altaz
+kinematics: altaz_over_the_top
+
+fieldbus:
+  backend: sim
+  cycle_us: 1000
+
+realtime:
+  cpu: -1
+  priority: 80
+  command_lead_us: 1000
+
+axes:
+  - name: az
+    drive: sim_cia402
+    bus_position: 0
+    counts_per_rev: 16777216
+    limits: {min_deg: -270, max_deg: 270, max_vel_deg_s: 30, max_acc_deg_s2: 20}
+  - name: el
+    drive: sim_cia402
+    bus_position: 1
+    counts_per_rev: 16777216
+    limits: {min_deg: -45, max_deg: 180, max_vel_deg_s: 10, max_acc_deg_s2: 10}

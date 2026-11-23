@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Mount interface between mount-svc / GUI and mount-rt (draft).
+//
+// Conventions:
+//  - Time: int64 nanoseconds since the Unix epoch (POSIX/UTC, CLOCK_REALTIME on a
+//    GPS/PPS-disciplined host).
+//  - Angles: radians in the mount's mechanical axis frame (after the pointing model).
+syntax = "proto3";
+
+package maxmount.v1;
+
+message TrajectoryPoint {
+  int64 t_ns = 1;
+  double position_rad = 2;
+  double velocity_rad_s = 3;
+}
+
+message AxisTrajectory {
+  string axis = 1;
+  repeated TrajectoryPoint points = 2;  // strictly increasing t_ns
+}
+
+// Points at or after the first new point replace any buffered future points.
+message TrajectoryUpdate {
+  repeated AxisTrajectory axes = 1;
+}
+
+message MountCommand {
+  oneof command {
+    Enable enable = 1;
+    Disable disable = 2;
+    QuickStop quick_stop = 3;
+    FaultReset fault_reset = 4;
+    ClearTrajectory clear_trajectory = 5;
+  }
+}
+
+message Enable {}
+message Disable {}
+message QuickStop {}
+message FaultReset {}
+message ClearTrajectory {
+  string axis = 1;  // empty = all axes
+}
+
+message CommandReply {
+  bool accepted = 1;
+  string message = 2;
+}
+
+enum DriveState {
+  DRIVE_STATE_UNKNOWN = 0;
+  DRIVE_STATE_NOT_READY_TO_SWITCH_ON = 1;
+  DRIVE_STATE_SWITCH_ON_DISABLED = 2;
+  DRIVE_STATE_READY_TO_SWITCH_ON = 3;
+  DRIVE_STATE_SWITCHED_ON = 4;
+  DRIVE_STATE_OPERATION_ENABLED = 5;
+  DRIVE_STATE_QUICK_STOP_ACTIVE = 6;
+  DRIVE_STATE_FAULT_REACTION_ACTIVE = 7;
+  DRIVE_STATE_FAULT = 8;
+}
+
+message AxisTelemetry {
+  string axis = 1;
+  double cmd_position_rad = 2;
+  double cmd_velocity_rad_s = 3;
+  double act_position_rad = 4;
+  DriveState state = 5;
+  uint32 statusword = 6;
+  uint32 error_code = 7;
+  uint32 flags = 8;  // bit0 limited, bit1 starved, bit2 holding, bit3 before-start
+  uint32 buffered_points = 9;
+}
+
+message LoopStats {
+  uint64 cycles = 1;
+  uint64 overruns = 2;
+  int64 max_wake_latency_ns = 3;
+}
+
+message MountTelemetry {
+  int64 t_ns = 1;
+  uint64 cycle = 2;
+  bool enabled = 3;
+  repeated AxisTelemetry axes = 4;
+  LoopStats loop = 5;
+}
+
+// High-rate telemetry is published in batches to keep message rates reasonable.
+message MountTelemetryBatch {
+  repeated MountTelemetry samples = 1;
+}

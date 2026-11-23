@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Drive descriptor: Technosoft iPOS4808 BX-CAT.
+# DRAFT: verify every entry against the drive's ESI file and firmware before use.
+# Motor, feedback (sin/cos + Halls, dual-loop) and servo tuning are configured in
+# EasyMotion Studio and stored in the drive; this file only covers the EtherCAT interface.
+descriptor_version: 1
+vendor: Technosoft
+model: iPOS4808 BX-CAT
+profile: cia402
+
+identity:
+  vendor_id: null      # TODO: from ESI file or SOEM slaveinfo
+  product_code: null   # TODO
+
+modes: [csp]           # TODO: confirm firmware supports mode 8 (CSP)
+
+sync:
+  distributed_clocks: true
+  sync0_cycle_us: 1000
+
+rx_pdo:                # master -> drive
+  - {index: 0x6040, sub: 0, type: u16, field: controlword}
+  - {index: 0x6060, sub: 0, type: i8,  field: mode}
+  - {index: 0x607A, sub: 0, type: i32, field: target_position}
+  - {index: 0x60B1, sub: 0, type: i32, field: velocity_offset}   # TODO: confirm support
+  - {index: 0x60B2, sub: 0, type: i16, field: torque_offset}     # TODO: confirm support
+
+tx_pdo:                # drive -> master
+  - {index: 0x6041, sub: 0, type: u16, field: statusword}
+  - {index: 0x6061, sub: 0, type: i8,  field: mode_display}
+  - {index: 0x6064, sub: 0, type: i32, field: position_actual}
+  - {index: 0x606C, sub: 0, type: i32, field: velocity_actual}
+  - {index: 0x6077, sub: 0, type: i16, field: torque_actual}
+  - {index: 0x603F, sub: 0, type: u16, field: error_code}
+
+capabilities:
+  velocity_offset: unverified
+  torque_offset: unverified
+
+units:
+  # TODO: iPOS velocity objects use internal units (position counts per slow-loop sample).
+  # Record the slow-loop period here so velocity feedforward can be scaled correctly.
+  velocity: internal
+
+startup_sdo: []        # e.g. interpolation time period, following-error window
