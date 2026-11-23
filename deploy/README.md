@@ -40,8 +40,34 @@ Then reserve core 3 for `mount-rt` by appending to `/boot/firmware/cmdline.txt` 
 isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2
 ```
 
-Verify with `cyclictest -m -p 90 -a 3 -i 1000 -D 1h` while cameras stream, WiFi is busy and
-EtherCAT is running. Target: worst-case latency well under 100 µs.
+Use the `performance` CPU frequency governor so frequency changes don't stall the RT core.
+Append to the same line in `cmdline.txt`:
+
+```
+cpufreq.default_governor=performance
+```
+
+Verify with `cyclictest -m -p 90 -a 3 -t 1 -i 1000 -D 1h` while cameras stream, WiFi is busy and
+EtherCAT is running. The SOEM backend sends each frame 500 µs before SYNC0, so worst-case wake
+latency must stay well below about 400 µs.
+
+Measured on the reference Pi 4 (6.18.60 RT kernel, core 3 isolated, `performance` governor),
+running `cyclictest` for 60 s alongside one `stress-ng` load at a time:
+
+| Load on cores 0-2 | Max latency (µs) |
+| --- | --- |
+| none | 11 |
+| `--cpu 3` | 32 |
+| `--io 2` | 21 |
+| `--memcpy 3` | 17 |
+| `--vm 1 --vm-bytes 256M` | 101 |
+| `--cpu 3 --io 2 --vm 1` started together | 187 (at stress start) |
+
+Memory bandwidth (`memcpy`) barely affects the isolated core. What does is repeatedly mapping
+and unmapping memory (`vm`), because on ARM each change to the page tables broadcasts
+TLB invalidations to all cores. Services that run on the Pi should reuse frame buffers instead
+of allocating a large array for every camera frame. glibc serves allocations above 128 KiB with
+`mmap`/`munmap`.
 
 ## 2. Network
 
