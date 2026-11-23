@@ -1,7 +1,7 @@
 # Raspberry Pi deployment (draft)
 
-Target: Raspberry Pi 4B, 64-bit Raspberry Pi OS (Debian 13 "Trixie"), kernel 6.12+ built with
-`CONFIG_PREEMPT_RT=y`.
+Target: Raspberry Pi 4B, 64-bit Raspberry Pi OS Lite (Debian 13 "Trixie") with Raspberry Pi's
+PREEMPT_RT kernel package. This setup was tested with `6.18.60+rpt-rpi-v8-rt`.
 
 ## 0. First boot without a monitor
 
@@ -19,9 +19,22 @@ log in with `ssh USER@HOSTNAME.local`. If setup fails, check `sudo cloud-init st
 
 ## 1. Real-time kernel
 
-Build the Raspberry Pi kernel (6.12 or later) with `CONFIG_PREEMPT_RT=y`; RT is in mainline
-since 6.12, so no external patch is needed. Then reserve core 3 for `mount-rt` by appending to
-`/boot/firmware/cmdline.txt` (single line):
+Raspberry Pi OS ships a PREEMPT_RT build of its Pi 4 kernel, so no kernel build is needed:
+
+```sh
+sudo apt install -y linux-image-rpi-v8-rt     # installs kernel8_rt.img + initramfs8_rt
+sudo cp /boot/firmware/config.txt /boot/firmware/config.txt.bak
+printf '\n[pi4]\nkernel=kernel8_rt.img\n[all]\n' | sudo tee -a /boot/firmware/config.txt
+sudo reboot
+uname -v                                      # should contain PREEMPT_RT
+```
+
+`auto_initramfs=1` (the default) loads `initramfs8_rt` automatically for that kernel. To go back
+to the standard kernel, delete the `kernel=` line, which you can also do from another computer
+by editing `config.txt` on the boot partition. Do not use Debian's generic `linux-image-rt-arm64`
+kernel; it lacks Raspberry Pi drivers and device-tree setup.
+
+Then reserve core 3 for `mount-rt` by appending to `/boot/firmware/cmdline.txt` (single line):
 
 ```
 isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2
