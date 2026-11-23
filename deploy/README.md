@@ -3,6 +3,20 @@
 Target: Raspberry Pi 4B, 64-bit Raspberry Pi OS (Debian 13 "Trixie"), kernel 6.12+ built with
 `CONFIG_PREEMPT_RT=y`.
 
+## 0. First boot without a monitor
+
+Raspberry Pi OS (Trixie) configures itself on first boot with cloud-init. After flashing the
+card, run the following on the machine that flashed it (tested on macOS):
+
+```sh
+deploy/pi/make-cloud-init.sh            # default boot volume: /Volumes/bootfs
+```
+
+It asks for a username, password (stored only as a SHA-512 hash), SSH public key, hostname,
+timezone and optional Wi-Fi network. It then writes `user-data` and `network-config` to the boot
+partition, keeping the originals as `*.orig`. After the first boot, which takes 2-3 minutes,
+log in with `ssh USER@HOSTNAME.local`. If setup fails, check `sudo cloud-init status --long`.
+
 ## 1. Real-time kernel
 
 Build the Raspberry Pi kernel (6.12 or later) with `CONFIG_PREEMPT_RT=y`; RT is in mainline
