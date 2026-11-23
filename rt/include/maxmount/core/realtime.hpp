@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 
 #include "maxmount/common/time.hpp"
 
@@ -33,6 +34,8 @@ class CyclicLoop {
 public:
     explicit CyclicLoop(nanos period) : period_(period) {}
 
+    // Calls body() once per period. If body returns a value, it is added to the next wake-up
+    // time (used to phase-lock to an EtherCAT distributed clock).
     template <typename Body>
     void run(const std::atomic<bool>& stop, Body&& body) {
         nanos next = monotonic_ns() + period_;
@@ -42,9 +45,14 @@ public:
             if (latency > stats_.max_wake_latency_ns.load(std::memory_order_relaxed)) {
                 stats_.max_wake_latency_ns.store(latency, std::memory_order_relaxed);
             }
-            body();
+            nanos correction = 0;
+            if constexpr (std::is_void_v<std::invoke_result_t<Body&>>) {
+                body();
+            } else {
+                correction = static_cast<nanos>(body());
+            }
             stats_.cycles.fetch_add(1, std::memory_order_relaxed);
-            next += period_;
+            next += period_ + correction;
             const nanos now = monotonic_ns();
             if (now > next) {  // missed one or more deadlines: count them and re-align
                 const nanos missed = (now - next) / period_ + 1;

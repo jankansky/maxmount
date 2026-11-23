@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Fieldbus abstraction. A backend (SOEM, simulation, ...) maps each drive's process data to
 // the vendor-neutral CiA 402 cyclic objects below, using the drive descriptor's PDO map.
+//
+// Cycle order (driven by the Controller):
+//   receive()  -> read the frame sent last cycle and update inputs()
+//   ...compute outputs...
+//   send()     -> write outputs() and transmit the frame
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+
+#include "maxmount/common/time.hpp"
 
 namespace maxmount {
 
@@ -30,8 +37,10 @@ struct Cia402Inputs {
 
 struct FieldbusStats {
     std::uint64_t cycles = 0;
-    std::uint64_t lost_frames = 0;
-    std::uint64_t working_counter_errors = 0;
+    std::uint64_t lost_frames = 0;             // no frame returned
+    std::uint64_t working_counter_errors = 0;  // frame returned with too low a working counter
+    int last_working_counter = 0;
+    int expected_working_counter = 0;
 };
 
 class Fieldbus {
@@ -44,14 +53,19 @@ public:
 
     virtual std::size_t drive_count() const = 0;
 
-    // Real-time: send outputs and receive inputs for one cycle.
-    virtual bool exchange() = 0;
+    // Real-time. receive() returns false if inputs could not be refreshed this cycle.
+    virtual bool receive() = 0;
+    virtual bool send() = 0;
 
     virtual const Cia402Inputs& inputs(std::size_t drive) const = 0;
     virtual Cia402Outputs& outputs(std::size_t drive) = 0;
 
     virtual FieldbusStats stats() const = 0;
     virtual std::string_view name() const = 0;
+
+    // Adjustment to add to the next cycle's wake-up time so the host loop stays phase-locked
+    // to the bus's distributed clock. Zero for backends without DC.
+    virtual nanos cycle_correction_ns() const { return 0; }
 };
 
 }  // namespace maxmount

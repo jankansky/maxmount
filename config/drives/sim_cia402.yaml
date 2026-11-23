@@ -5,6 +5,8 @@ vendor: maxmount
 model: simulated CSP servo
 profile: cia402
 modes: [csp]
+pdo_mapping:
+  configure: false     # no process image: the simulator exchanges CiA 402 objects directly
 capabilities:
   velocity_offset: supported
   torque_offset: ignored

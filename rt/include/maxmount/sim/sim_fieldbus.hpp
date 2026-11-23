@@ -57,7 +57,8 @@ public:
     bool start() override;
     void stop() override;
     std::size_t drive_count() const override { return drives_.size(); }
-    bool exchange() override;
+    bool receive() override { return running_; }
+    bool send() override;
     const Cia402Inputs& inputs(std::size_t drive) const override { return drives_[drive].inputs(); }
     Cia402Outputs& outputs(std::size_t drive) override { return outputs_[drive]; }
     FieldbusStats stats() const override { return stats_; }

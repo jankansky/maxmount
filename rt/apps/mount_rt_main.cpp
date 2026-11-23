@@ -1,20 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// mount-rt: real-time mount controller. This scaffold runs against simulated drives and feeds
-// a demonstration trajectory; the SOEM backend and Zenoh bridge will replace those pieces.
+// mount-rt: real-time mount controller.
+//
+// Modes in this version:
+//   simulation (default)       two simulated axes follow a demonstration trajectory
+//   --soem IFNAME --descriptor F
+//                              EtherCAT monitor: brings the bus to OP and reports drive state,
+//                              statusword, position and errors. Drives are NEVER enabled in
+//                              this mode; motion on hardware arrives with mount-svc.
 #include <atomic>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "maxmount/config/drive_descriptor_yaml.hpp"
 #include "maxmount/core/controller.hpp"
 #include "maxmount/core/realtime.hpp"
 #include "maxmount/sim/sim_fieldbus.hpp"
+#if defined(MAXMOUNT_HAVE_SOEM)
+#include "maxmount/fieldbus/soem_fieldbus.hpp"
+#endif
 
 namespace {
 
@@ -27,12 +37,21 @@ struct Options {
     int period_us = 1000;
     int rt_priority = 80;
     int rt_cpu = -1;
+    std::string soem_interface;  // empty = simulation
+    std::string descriptor_path;
+    int drives = 2;
 };
 
 void usage() {
     std::puts(
-        "usage: mount-rt [--duration S] [--period-us N] [--rt-prio P] [--rt-cpu C]\n"
-        "  Runs the controller against simulated CiA 402 drives with a demo trajectory.");
+        "usage: mount-rt [options]\n"
+        "  --duration S        run time in seconds (default 10; 0 = until Ctrl-C)\n"
+        "  --period-us N       cycle period (default 1000)\n"
+        "  --rt-prio P         SCHED_FIFO priority (default 80, Linux)\n"
+        "  --rt-cpu C          pin the RT thread to CPU C (Linux)\n"
+        "  --soem IFNAME       EtherCAT monitor mode on IFNAME (drives are never enabled)\n"
+        "  --descriptor FILE   drive descriptor YAML for --soem\n"
+        "  --drives N          number of drives at bus positions 0..N-1 (default 2)");
 }
 
 Options parse(int argc, char** argv) {
@@ -50,6 +69,9 @@ Options parse(int argc, char** argv) {
         else if (a == "--period-us") o.period_us = std::atoi(next());
         else if (a == "--rt-prio") o.rt_priority = std::atoi(next());
         else if (a == "--rt-cpu") o.rt_cpu = std::atoi(next());
+        else if (a == "--soem") o.soem_interface = next();
+        else if (a == "--descriptor") o.descriptor_path = next();
+        else if (a == "--drives") o.drives = std::atoi(next());
         else {
             usage();
             std::exit(a == "-h" || a == "--help" ? 0 : 2);
@@ -82,53 +104,93 @@ int main(int argc, char** argv) {
 
     const nanos period = static_cast<nanos>(opt.period_us) * 1000;
     const double dt = ns_to_s(period);
+    const bool hardware = !opt.soem_interface.empty();
 
-    // Simulated axes: 2^24 counts per revolution, velocity feedforward in counts/s.
-    const double counts_per_rad = 16777216.0 / (2 * kPi);
-    std::vector<AxisConfig> axes(2);
-    axes[0].name = "az";
-    axes[0].counts_per_rad = counts_per_rad;
-    axes[0].vel_units_per_rad_s = counts_per_rad;
-    axes[0].limits = {-270 * kDeg, 270 * kDeg, 30 * kDeg, 20 * kDeg};
-    axes[1].name = "el";
-    axes[1].counts_per_rad = counts_per_rad;
-    axes[1].vel_units_per_rad_s = counts_per_rad;
-    axes[1].limits = {-45 * kDeg, 180 * kDeg, 10 * kDeg, 10 * kDeg};
+    std::vector<AxisConfig> axes;
+    std::unique_ptr<Fieldbus> bus;
 
-    sim::SimFieldbus bus(axes.size(), dt);
-    auto controller = std::make_unique<Controller>(bus, axes);
-    if (!bus.start()) {
-        std::fprintf(stderr, "fieldbus %s failed to start\n", std::string(bus.name()).c_str());
-        return 1;
+    if (hardware) {
+#if defined(MAXMOUNT_HAVE_SOEM)
+        if (opt.descriptor_path.empty() || opt.drives < 1 || opt.drives > static_cast<int>(kMaxAxes)) {
+            usage();
+            return 2;
+        }
+        SoemConfig sc;
+        sc.interface = opt.soem_interface;
+        sc.cycle = period;
+        try {
+            const DriveDescriptor d = config::load_drive_descriptor(opt.descriptor_path);
+            for (int i = 0; i < opt.drives; ++i) sc.drives.push_back({i, d});
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "%s\n", e.what());
+            return 1;
+        }
+        // Monitor mode reports raw drive counts: one "radian" per count, no limits needed.
+        for (int i = 0; i < opt.drives; ++i) {
+            AxisConfig a;
+            a.name = "drive" + std::to_string(i);
+            axes.push_back(a);
+        }
+        auto soem = std::make_unique<SoemFieldbus>(sc);
+        if (!soem->start()) {
+            std::fprintf(stderr, "EtherCAT start failed: %s\n", soem->last_error().c_str());
+            return 1;
+        }
+        std::printf("EtherCAT bus is OP on %s with %d drive(s); monitoring only\n", sc.interface.c_str(),
+                    opt.drives);
+        bus = std::move(soem);
+#else
+        std::fprintf(stderr, "built without SOEM support (configure with -DMAXMOUNT_WITH_SOEM=ON on Linux)\n");
+        return 2;
+#endif
+    } else {
+        // Simulated axes: 2^24 counts per revolution, velocity feedforward in counts/s.
+        const double counts_per_rad = 16777216.0 / (2 * kPi);
+        axes.resize(2);
+        axes[0].name = "az";
+        axes[0].limits = {-270 * kDeg, 270 * kDeg, 30 * kDeg, 20 * kDeg};
+        axes[1].name = "el";
+        axes[1].limits = {-45 * kDeg, 180 * kDeg, 10 * kDeg, 10 * kDeg};
+        for (auto& a : axes) {
+            a.counts_per_rad = counts_per_rad;
+            a.vel_units_per_rad_s = counts_per_rad;
+        }
+        bus = std::make_unique<sim::SimFieldbus>(axes.size(), dt);
+        bus->start();
     }
+
+    auto controller = std::make_unique<Controller>(*bus, axes);
 
     CyclicLoop loop(period);
     std::thread rt_thread([&] {
         const RealtimeSetup rs = configure_realtime_thread(opt.rt_priority, opt.rt_cpu);
         std::printf("rt thread: %s\n", rs.message.c_str());
-        loop.run(g_stop, [&] { controller->cycle(realtime_ns(), dt); });
+        loop.run(g_stop, [&]() -> nanos {
+            controller->cycle(realtime_ns(), dt);
+            return bus->cycle_correction_ns();
+        });
     });
 
     const std::vector<DemoAxis> demo = {{60 * kDeg, 20.0}, {30 * kDeg, 30.0}};
-    const nanos t_start = realtime_ns() + 500'000'000;  // trajectory begins 0.5 s from now
-    const nanos t_end = t_start + static_cast<nanos>(opt.duration_s * 1e9);
+    const nanos t_start = realtime_ns() + 500'000'000;
+    const nanos t_end = opt.duration_s > 0 ? t_start + static_cast<nanos>(opt.duration_s * 1e9) : INT64_MAX;
     const nanos point_step = 50'000'000;  // 20 Hz trajectory points
     const nanos lookahead = 1'000'000'000;
     nanos next_point = t_start;
 
-    controller->post({CommandType::Enable, 0, {}});
+    if (!hardware) controller->post({CommandType::Enable, 0, {}});
 
     std::vector<double> prev_cmd(axes.size(), 0.0);
     std::vector<double> max_err(axes.size(), 0.0);
     TelemetrySample last{};
+    std::uint64_t stale_cycles = 0;
     nanos next_report = realtime_ns() + 1'000'000'000;
     bool disabling = false;
 
     while (!g_stop.load()) {
         const nanos now = realtime_ns();
 
-        // Feed trajectory points (this is mount-svc's job in the full system).
-        while (!disabling && next_point <= now + lookahead && next_point <= t_end) {
+        while (!hardware && !disabling && next_point <= now + lookahead && next_point <= t_end) {
             const double t = ns_to_s(next_point - t_start);
             for (std::size_t i = 0; i < axes.size(); ++i) {
                 controller->post({CommandType::PushPoint, static_cast<std::uint8_t>(i),
@@ -137,9 +199,8 @@ int main(int argc, char** argv) {
             next_point += point_step;
         }
 
-        // Drain telemetry. Command lead equals one cycle, so the previous cycle's command is
-        // the setpoint for "now"; compare it with the actual position.
         while (auto s = controller->poll_telemetry()) {
+            if (!s->inputs_fresh) ++stale_cycles;
             for (std::size_t i = 0; i < s->n_axes; ++i) {
                 if (s->axes[i].state == cia402::State::OperationEnabled) {
                     max_err[i] = std::max(max_err[i], std::abs(s->axes[i].act_pos - prev_cmd[i]));
@@ -151,31 +212,46 @@ int main(int argc, char** argv) {
 
         if (now >= next_report) {
             next_report += 1'000'000'000;
-            std::printf("t=%6.1fs  loop max-latency %6.1f us  overruns %llu |",
-                        ns_to_s(now - t_start), ns_to_s(loop.stats().max_wake_latency_ns.exchange(0)) * 1e6,
+            std::printf("t=%6.1fs  max-lat %6.1f us  overruns %llu", ns_to_s(now - t_start),
+                        ns_to_s(loop.stats().max_wake_latency_ns.exchange(0)) * 1e6,
                         static_cast<unsigned long long>(loop.stats().overruns.load()));
+            if (hardware) {
+                std::printf("  stale %llu lost %llu wkc-err %llu", static_cast<unsigned long long>(stale_cycles),
+                            static_cast<unsigned long long>(last.bus_lost_frames),
+                            static_cast<unsigned long long>(last.bus_wkc_errors));
+            }
+            std::printf(" |");
             for (std::size_t i = 0; i < axes.size(); ++i) {
                 const AxisTelemetry& a = last.axes[i];
-                std::printf("  %s %-16s act %8.3f deg  err %7.2f\" flags 0x%02x |", axes[i].name.c_str(),
-                            cia402::to_string(a.state), a.act_pos / kDeg, max_err[i] / kArcsec, a.flags);
+                if (hardware) {
+                    std::printf(" %s %-18s sw 0x%04x err 0x%04x pos %11.0f |", axes[i].name.c_str(),
+                                cia402::to_string(a.state), a.statusword, a.error_code, a.act_pos);
+                } else {
+                    std::printf(" %s %-16s act %8.3f deg err %7.2f\" flags 0x%02x |", axes[i].name.c_str(),
+                                cia402::to_string(a.state), a.act_pos / kDeg, max_err[i] / kArcsec, a.flags);
+                }
                 max_err[i] = 0.0;
             }
             std::printf("\n");
             std::fflush(stdout);
         }
 
-        if (!disabling && now > t_end + 500'000'000) {
-            controller->post({CommandType::Disable, 0, {}});
-            disabling = true;
+        if (hardware) {
+            if (now > t_end) break;
+        } else {
+            if (!disabling && now > t_end + 500'000'000) {
+                controller->post({CommandType::Disable, 0, {}});
+                disabling = true;
+            }
+            if (disabling && !last.enabled) break;
         }
-        if (disabling && !last.enabled) break;
 
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
     g_stop.store(true);
     rt_thread.join();
-    bus.stop();
+    bus->stop();
     std::printf("stopped after %llu cycles, %llu overruns\n",
                 static_cast<unsigned long long>(loop.stats().cycles.load()),
                 static_cast<unsigned long long>(loop.stats().overruns.load()));

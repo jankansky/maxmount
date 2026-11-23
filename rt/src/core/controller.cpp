@@ -73,6 +73,7 @@ void Controller::apply(const Command& c) noexcept {
 }
 
 void Controller::cycle(nanos t_now, double dt) noexcept {
+    const bool inputs_fresh = bus_.receive();
     for (int n = 0; n < 256; ++n) {
         const auto c = commands_.try_pop();
         if (!c) break;
@@ -84,6 +85,10 @@ void Controller::cycle(nanos t_now, double dt) noexcept {
     ts.cycle = cycle_;
     ts.n_axes = static_cast<std::uint8_t>(axes_.size());
     ts.enabled = enabled_;
+    ts.inputs_fresh = inputs_fresh;
+    const FieldbusStats bs = bus_.stats();
+    ts.bus_lost_frames = bs.lost_frames;
+    ts.bus_wkc_errors = bs.working_counter_errors;
 
     bool all_at_rest = true;
     for (std::size_t i = 0; i < axes_.size(); ++i) {
@@ -154,7 +159,7 @@ void Controller::cycle(nanos t_now, double dt) noexcept {
         telemetry_.try_push(ts);  // dropped if the consumer falls behind
     }
 
-    bus_.exchange();
+    bus_.send();
     ++cycle_;
 }
 

@@ -59,6 +59,9 @@ struct TelemetrySample {
     std::uint64_t cycle = 0;
     std::uint8_t n_axes = 0;
     bool enabled = false;
+    bool inputs_fresh = false;  // fieldbus delivered new inputs this cycle
+    std::uint64_t bus_lost_frames = 0;
+    std::uint64_t bus_wkc_errors = 0;
     std::array<AxisTelemetry, kMaxAxes> axes{};
 };
 
@@ -75,7 +78,7 @@ public:
     bool post(const Command& c) noexcept { return commands_.try_push(c); }
     std::optional<TelemetrySample> poll_telemetry() noexcept { return telemetry_.try_pop(); }
 
-    // RT side: compute outputs from the latest inputs, then exchange with the bus.
+    // RT side: receive inputs, compute outputs, send.
     void cycle(nanos t_now, double dt) noexcept;
 
     std::size_t axis_count() const noexcept { return axes_.size(); }

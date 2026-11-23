@@ -129,7 +129,7 @@ bool SimFieldbus::start() {
 
 void SimFieldbus::stop() { running_ = false; }
 
-bool SimFieldbus::exchange() {
+bool SimFieldbus::send() {
     if (!running_) return false;
     for (std::size_t i = 0; i < drives_.size(); ++i) {
         drives_[i].step(outputs_[i], cycle_s_);

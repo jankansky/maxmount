@@ -28,13 +28,15 @@ RealtimeSetup configure_realtime_thread(int priority, int cpu) {
         for (std::size_t i = 0; i < sizeof(stack); i += 4096) stack[i] = 0;
     }
 
-    sched_param sp{};
-    sp.sched_priority = priority;
-    const int rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
-    if (rc == 0) {
-        r.fifo_priority = true;
-    } else {
-        r.message += std::string("SCHED_FIFO failed: ") + std::strerror(rc) + "; ";
+    if (priority > 0) {  // priority <= 0: stay in the default scheduling class
+        sched_param sp{};
+        sp.sched_priority = priority;
+        const int rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+        if (rc == 0) {
+            r.fifo_priority = true;
+        } else {
+            r.message += std::string("SCHED_FIFO failed: ") + std::strerror(rc) + "; ";
+        }
     }
 
     if (cpu >= 0) {

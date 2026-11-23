@@ -44,6 +44,27 @@ ctest --test-dir build --output-on-failure
 tracking telemetry once per second. On Linux it will request `SCHED_FIFO` priority and lock
 memory if permitted (`--rt-prio`, `--rt-cpu`).
 
+### EtherCAT (Linux)
+
+```sh
+cmake -S . -B build -G Ninja -DMAXMOUNT_WITH_SOEM=ON   # fetches SOEM v2.0.1; needs CMake >= 3.28
+cmake --build build
+sudo setcap cap_net_raw,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt
+./build/rt/mount-rt --soem eth0 --descriptor config/drives/technosoft_ipos4808_bx_cat.yaml --duration 0
+```
+
+This monitor mode brings the bus to OP and reports drive state without ever enabling the
+drives. See [`rt/src/fieldbus/soem/README.md`](rt/src/fieldbus/soem/README.md).
+
+To build and test the Linux configuration from macOS, use the container in
+[`tools/docker`](tools/docker/linux-build.Dockerfile) (arm64 matches the Pi 4):
+
+```sh
+docker build -t maxmount-linux-build -f tools/docker/linux-build.Dockerfile tools/docker
+docker run --rm -v "$PWD":/src:ro maxmount-linux-build bash -c \
+  'cmake -S /src -B /tmp/b -G Ninja -DMAXMOUNT_WITH_SOEM=ON && cmake --build /tmp/b && ctest --test-dir /tmp/b'
+```
+
 ## Reference hardware
 
 Custom alt-az mount: Aerotech ADRT-150 direct-drive azimuth, Teknic Hudson motor with
