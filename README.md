@@ -6,8 +6,9 @@ PREEMPT_RT kernel acts as the EtherCAT master and observatory computer; a web GU
 remote control.
 
 > **Status:** early scaffold. The real-time controller core runs against a simulated
-> CiA 402 drive on any POSIX machine. The SOEM EtherCAT backend, Python services,
-> Zenoh bridge and GUI are not written yet.
+> CiA 402 drive on any POSIX machine. The SOEM EtherCAT backend has a monitor mode that
+> has not yet been tested on hardware. The Python services, Zenoh bridge and GUI are not
+> written yet.
 
 ## Architecture in one paragraph
 
