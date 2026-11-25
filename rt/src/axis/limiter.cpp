@@ -27,7 +27,11 @@ LimiterOutput MotionLimiter::track(double target_pos, double target_vel, double 
     const double correction = std::copysign(std::min(ae / dt, braking_speed(ae, lim_.max_acc, dt)), e);
 
     LimiterOutput out = finish(target_vel + correction, dt);
-    out.limited = out.limited || target != target_pos;
+    // Limited = the command differs from the trajectory. That includes catching up along the
+    // braking envelope after a disturbance (a missed cycle, a target jump), where the output
+    // follows the envelope without hitting the acceleration clamp.
+    constexpr double kTol = 1e-9;  // rad, ~0.2 milliarcsec
+    out.limited = out.limited || target != target_pos || std::abs(out.pos - target) > kTol;
     return out;
 }
 

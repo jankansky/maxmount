@@ -12,6 +12,26 @@ realtime:
   priority: 80
   command_lead_us: 1000
 
+# Observatory site (mount-svc): Mount Wilson, as an example for simulation.
+site:
+  latitude_deg: 34.2247
+  longitude_deg: -118.0570
+  height_m: 1742
+  pressure_hpa: 830
+  temperature_c: 10
+  humidity: 0.3
+  dut1_s: auto            # UT1-UTC from IERS Bulletin A (cached weekly), or seconds
+
+tracking:
+  horizon_min_el_deg: 10
+  sun_min_sep_deg: 30
+  slew_vel_deg_s: 10
+  slew_acc_deg_s2: 10
+  rate_margin: 0.9
+  over_the_top_tolerance_deg: 1.0
+  point_rate_hz: 20
+  lookahead_s: 5
+
 # Zenoh bridge (needs mount-rt built with -DMAXMOUNT_WITH_ZENOH=ON). Keys: maxmount/<site>/mount/...
 zenoh:
   site: sim

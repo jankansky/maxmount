@@ -118,6 +118,14 @@ zenoh-c 1.10.2 is downloaded as a prebuilt aarch64 archive and linked statically
 prefer Eclipse's Debian packages (`libzenohc-dev` from download.eclipse.org/zenoh/debian-repo),
 CMake uses them instead.
 
+Python services (`mount-svc`):
+
+```sh
+sudo apt install -y python3-venv
+python3 -m venv svc/.venv && svc/.venv/bin/pip install -e 'svc[dev]'
+svc/.venv/bin/python -m pytest svc/tests
+```
+
 ## 5. Services
 
 systemd units for `mount-rt`, `mount-svc` and the Zenoh router will be added as they are written.

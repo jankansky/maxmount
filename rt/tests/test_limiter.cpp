@@ -44,6 +44,28 @@ TEST(MotionLimiter, StepRespectsVelocityAndAcceleration) {
     EXPECT_NEAR(lim.velocity(), 0.0, 1e-9);
 }
 
+// Every cycle in which the output is off the trajectory is reported as limited, including the
+// deceleration along the braking envelope while catching up after a jump (seen as unflagged
+// errors after missed cycles).
+TEST(MotionLimiter, LimitedWheneverOffTheTrajectory) {
+    const AxisLimits l{-10.0, 10.0, 0.5, 0.35};
+    MotionLimiter lim(l);
+    lim.reset(0.0);
+    const double v = 0.035;  // rad/s, ~2 deg/s
+    double t = 0.0;
+    for (int k = 0; k < 1000; ++k, t += kDt) lim.track(v * t, v, kDt);  // locked on
+    t += 15 * kDt;  // 15 missed cycles: the target jumps ahead
+    int off = 0;
+    for (int k = 0; k < 5000; ++k, t += kDt) {
+        const LimiterOutput o = lim.track(v * t, v, kDt);
+        const bool on_track = std::abs(o.pos - v * t) <= 1e-9;
+        if (!on_track) ++off;
+        ASSERT_EQ(o.limited, !on_track) << "cycle " << k;
+    }
+    EXPECT_GT(off, 1);
+    EXPECT_NEAR(lim.position(), v * (t - kDt), 1e-9);
+}
+
 TEST(MotionLimiter, SoftLimitIsNeverCrossed) {
     const AxisLimits l{-1.0, 1.0, 1.0, 1.0};
     MotionLimiter lim(l);

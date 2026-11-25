@@ -9,10 +9,21 @@ description = "Non-real-time services for the maxmount observatory control syste
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "numpy>=1.26",
+    "pyerfa>=2.0.1",          # ERFA (BSD-3-Clause): astrometry and time scales
+    "sgp4>=2.23",             # Vallado's SGP4 (MIT)
+    "pyyaml>=6",
+    "eclipse-zenoh==1.10.2",  # must match mount-rt's zenoh-c
+    "protobuf>=5.26",
+    "grpcio-tools>=1.62",     # bundled protoc: generates maxmount.v1 code matching the runtime
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+
+[project.scripts]
+mount-svc = "maxmount_svc.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

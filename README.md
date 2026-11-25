@@ -8,9 +8,9 @@ remote control.
 > **Status:** early development. The real-time controller runs against a simulated CiA 402
 > drive on any POSIX machine. On the reference Pi 4 the SOEM EtherCAT backend brings a
 > Technosoft iPOS4808 to OP at 1 kHz with distributed clocks (monitor mode). Powered motion on
-> hardware awaits axis commissioning. The Python services and GUI are not written yet. The
-> Zenoh bridge (`--serve`) accepts trajectories and commands and publishes
-> telemetry; `mount-ctl` is a command-line client for it.
+> hardware awaits axis commissioning. The Zenoh bridge (`--serve`) accepts trajectories and
+> commands and publishes telemetry. `mount-svc` (Python, [`svc/`](svc/README.md)) plans and
+> tracks stars and satellites through it; camera services and the GUI are not written yet.
 
 ## Architecture in one paragraph
 

@@ -29,6 +29,28 @@ time:
   pps_device: /dev/pps0      # GNSS module with PPS on a GPIO pin
   max_clock_error_us: 10     # refuse satellite passes above this
 
+# Observatory site (mount-svc). The USB GNSS receiver can supply this later; until then set it
+# by hand.
+site:
+  latitude_deg: null      # TODO
+  longitude_deg: null     # TODO, east positive
+  height_m: 0
+  pressure_hpa: 1013.25   # 0 disables refraction
+  temperature_c: 10
+  humidity: 0.5
+  dut1_s: auto            # UT1-UTC from IERS Bulletin A (cached weekly), or seconds
+
+# mount-svc tracking and safety settings.
+tracking:
+  horizon_min_el_deg: 10
+  sun_min_sep_deg: 30
+  slew_vel_deg_s: 5
+  slew_acc_deg_s2: 5
+  rate_margin: 0.9                 # plans use at most this fraction of the axis limits
+  over_the_top_tolerance_deg: 1.0  # widefield acquisition: raise; C8 narrow field: lower
+  point_rate_hz: 20
+  lookahead_s: 5
+
 # Zenoh bridge (needs mount-rt built with -DMAXMOUNT_WITH_ZENOH=ON). Keys: maxmount/<site>/mount/...
 zenoh:
   site: lab

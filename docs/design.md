@@ -74,12 +74,18 @@ low correction latency (~1–2 ms vs. 60 ms+) and direct alignment of motion to 
 
 ## Targets and tracking
 
-The elevation axis reaching +180° removes the alt-az zenith keyhole: overhead passes are tracked
-"over the top" with little azimuth motion.
+The elevation axis reaching +180° does **not** remove the alt-az zenith keyhole. Every sky
+direction can be reached as `(az, el)` or `(az + 180°, 180° − el)`, and the two coincide only at
+the zenith. A pass that misses the zenith therefore has two exact tracking solutions with
+identical azimuth rates. What the extra range adds is an "over-the-top" mode: azimuth is held
+on the vertical great circle that best fits the pass and elevation sweeps through the zenith.
+This trades the impossible azimuth rate of a near-zenith pass for a pointing error equal to the
+pass's distance from that circle. (An earlier version of this document claimed the keyhole was
+removed; the planner's tests check the corrected statement.)
 
 - **Target providers:** sidereal (catalog RA/Dec with proper motion), satellites from TLE/OMM via SGP4 (CelesTrak, Space-Track), ephemeris tables (OEM/CPF), and fixed alt-az positions.
 - **Astrometry:** ERFA for time scales, precession-nutation, aberration and refraction from measured pressure and temperature.
-- **Pass planner:** simulates each pass in normal mode (elevation 0–90°) and flip mode (azimuth set near the pass direction, elevation sweeping 0→180°). It picks the mode with the lowest peak axis rates that fits velocity, acceleration, cable-wrap and horizon limits, and rejects passes that do not fit.
+- **Pass planner:** plans each pass three ways: exact on the normal branch, exact on the flipped branch (which can suit the cable wrap or elevation limits better), and over-the-top with a bounded pointing error. It checks velocity, acceleration, cable wrap, horizon mask and Sun separation. It prefers an exact plan, falls back to over-the-top within a configured error tolerance, and otherwise rejects the pass.
 - **TLE error correction:** live along-track time offset and cross-track offset, adjustable from the GUI or by the camera loop.
 - **Closed-loop optical tracking:**
     1. The widefield GigE camera detects the satellite and measures its offset from prediction.
