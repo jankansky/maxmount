@@ -176,7 +176,10 @@ struct SoemFieldbus::Impl {
         std::memset(&ctx, 0, sizeof(ctx));  // large C struct: avoid a stack temporary
         ctx.userdata = this;
         if (!ecx_init(&ctx, cfg.interface.c_str())) {
-            error = "cannot open " + cfg.interface + " (needs root or CAP_NET_RAW)";
+            // SOEM opens a raw socket (CAP_NET_RAW) and sets promiscuous mode (CAP_NET_ADMIN).
+            error = "cannot open " + cfg.interface +
+                    " (needs root, or CAP_NET_RAW and CAP_NET_ADMIN: sudo setcap "
+                    "cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep mount-rt)";
             return false;
         }
         opened = true;

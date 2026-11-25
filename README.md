@@ -50,7 +50,7 @@ memory if permitted (`--rt-prio`, `--rt-cpu`).
 ```sh
 cmake -S . -B build -G Ninja -DMAXMOUNT_WITH_SOEM=ON   # fetches SOEM v2.0.1; needs CMake >= 3.28
 cmake --build build
-sudo setcap cap_net_raw,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt
+sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt
 ./build/rt/mount-rt --soem eth0 --descriptor config/drives/technosoft_ipos4808_bx_cat.yaml --duration 0
 ```
 

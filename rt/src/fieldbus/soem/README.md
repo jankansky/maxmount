@@ -25,7 +25,7 @@ wake-up so frames leave a fixed offset after SYNC0.
 ## Running on hardware
 
 ```sh
-sudo setcap cap_net_raw,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt
+sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt
 build/rt/mount-rt --soem eth0 --descriptor config/drives/technosoft_ipos4808_bx_cat.yaml \
                   --drives 2 --rt-cpu 3 --duration 0
 ```
