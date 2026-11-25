@@ -23,7 +23,7 @@ Custom alt-az mount on an iOptron tri-pier, with elevation travel from −45° t
 | Elevation load encoder | Renishaw RGH41 tape readhead + REE2000 interpolator | About 10 nm per count; check max count rate vs. drive input |
 | Drives | 2× Technosoft iPOS4808 BX-CAT | CiA 402 over EtherCAT, CSP mode |
 | Computer | Raspberry Pi 4B with PREEMPT_RT kernel | One core isolated for the RT loop |
-| Telescope | Celestron C8, primary mirror to be locked | External motorized focuser |
+| Telescope | Celestron C8, primary mirror to be locked, Starizona SCT Corrector IV (0.63× reducer/coma corrector) | External motorized focuser |
 | Widefield camera | The Imaging Source GigE | Through-axis Ethernet; acquisition and plate solving |
 | Narrow-field camera | ZWO USB3 behind the C8 | Through-axis USB; fast region-of-interest tracking |
 | GNSS | u-blox M8 USB receiver (1546:01a8) | Location and backup time; add a PPS-capable module for timing |
@@ -132,7 +132,8 @@ only the site terms.
 - **Narrow field (ZWO SDK):** region-of-interest capture at 50–200 fps during tracking; full frame for imaging and autofocus.
 - **Live view:** compressed preview (JPEG or H.264) to the GUI over WiFi, never raw frames.
 - **Locked primary:** no commercial mirror-lock kit for the standard C8 was found; options are a DIY clamp or an EdgeHD 8. Until then, flip-side pointing terms and the camera loop absorb mirror shift.
-- **Focuser:** at f/10 the critical focus zone is about 270 µm, so any external focuser with 5–10 µm steps suffices; load capacity, low tilt and a temperature sensor matter more. Candidates: Starlight Feather Touch with MicroTouch motor, MoonLite CSL, PrimaLuce Esatto, or a crayford driven by a CiA 402 stepper drive on EtherCAT.
+- **Corrector:** Starizona SCT Corrector IV, 0.63×, 27 mm image circle. Retailers list a C8 at 1450 mm f/7.1 or f/6.8, and one user measured about 1260 mm; the actual focal length depends on the spacing and will come from plate solving. Back focus is 90.3 mm from the camera-side thread base, held to ±2 mm for large sensors. That budget must hold the rotator, filter wheel or off-axis guider, and the camera's own back focus. At 1260–1450 mm, 3.76 µm pixels sample 0.62–0.53″.
+- **Focuser:** with the corrector at f/6.3–7.1 the critical focus zone is about 110–135 µm (270 µm at f/10), so any external focuser with 5–10 µm steps suffices; load capacity, low tilt and a temperature sensor matter more. Candidates: Starlight Feather Touch with MicroTouch motor, MoonLite CSL, PrimaLuce Esatto, or a crayford driven by a CiA 402 stepper drive on EtherCAT.
 - **Autofocus:** half-flux-radius curve fit; triggered by temperature change, filter change, side flip, elapsed time and before scheduled passes; learned µm/°C compensation between runs.
 - **Rotator:** needed early; see [Field rotator](#field-rotator).
 
@@ -148,7 +149,10 @@ few seconds. That makes a rotator a requirement for deep-sky imaging, not an opt
 Requirements: continuous, smooth motion during the exposure with 0.01–0.02° tracking error; up
 to ~0.04 °/s (long exposures within ~5° of the zenith stay impractical); continuous rotation or
 enough range to plan around (more than 180° per night, plus 180° when the mount goes over the
-top); low backlash; a known zero; ~1 kg load; fits the back-focus budget.
+top); low backlash; a known zero; ~1 kg load; fits the corrector's 90.3 mm back-focus budget together
+with the filter wheel or off-axis guider and the camera. Thickness is therefore a selection
+criterion. The pixel-smear numbers above depend only on the sensor, so the corrector does not
+change them.
 
 | | A. Third EtherCAT axis (preferred end state) | B. Commercial USB rotator (quickest) |
 | --- | --- | --- |
