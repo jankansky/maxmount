@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <array>
 #include <stdexcept>
 
@@ -155,4 +157,52 @@ tx_pdo:
     codec.decode(buf.data(), in);
     EXPECT_EQ(in.following_error, -10);
     EXPECT_EQ(in.digital_inputs, 0x80010005u);
+}
+
+TEST(DriveDescriptor, SplitsMappingAcrossPdosAtBitLimit) {
+    auto d = csp_descriptor();
+    d.tx_pdo = {{0x6041, 0, DataType::U16, PdoField::Statusword},
+                {0x6061, 0, DataType::I8, PdoField::ModeDisplay},
+                {0x6064, 0, DataType::I32, PdoField::PositionActual},   // 56 bits
+                {0x606C, 0, DataType::I32, PdoField::VelocityActual},
+                {0x6077, 0, DataType::I16, PdoField::TorqueActual},     // 48 bits
+                {0x60F4, 0, DataType::I32, PdoField::FollowingError},
+                {0x60FD, 0, DataType::U32, PdoField::DigitalInputs}};  // 64 bits
+    d.max_pdo_bits = 64;
+    ASSERT_EQ(validate(d), "");
+
+    const auto pdos = split_pdos(d.tx_pdo, 64, 0);
+    ASSERT_EQ(pdos.size(), 3u);
+    EXPECT_EQ(pdos[0].size(), 3u);
+    EXPECT_EQ(pdos[1].size(), 2u);
+    EXPECT_EQ(pdos[2].size(), 2u);
+    EXPECT_EQ(split_pdos(d.tx_pdo, 0, 2).size(), 4u);  // entry-count limit
+
+    // Collect the TxPDO writes (everything from the first 0x1C13 write on).
+    const auto w = pdo_mapping_sdos(d);
+    std::size_t i = 0;
+    while (w[i].index != 0x1C13) ++i;
+    std::vector<SdoWrite> tx(w.begin() + static_cast<std::ptrdiff_t>(i), w.end());
+    EXPECT_EQ(tx.front().value, 0);  // assignment disabled first
+    for (std::uint16_t map : {0x1A00, 0x1A01, 0x1A02}) {
+        const auto count = std::find_if(tx.rbegin(), tx.rend(), [&](const SdoWrite& s) {
+            return s.index == map && s.subindex == 0;
+        });
+        ASSERT_NE(count, tx.rend());
+        EXPECT_EQ(count->value, map == 0x1A00 ? 3 : 2);
+    }
+    // Assignment lists the three objects in order, then enables them.
+    const std::size_t n = tx.size();
+    EXPECT_EQ(tx[n - 4].index, 0x1C13);
+    EXPECT_EQ(tx[n - 4].value, 0x1A00);
+    EXPECT_EQ(tx[n - 3].value, 0x1A01);
+    EXPECT_EQ(tx[n - 2].value, 0x1A02);
+    EXPECT_EQ(tx[n - 1].subindex, 0);
+    EXPECT_EQ(tx[n - 1].value, 3);
+    // The process-image layout is unchanged by the split.
+    EXPECT_EQ(PdoCodec(d).input_size(), 21u);
+
+    auto too_big = d;
+    too_big.max_pdo_bits = 16;  // a 32-bit entry can never fit
+    EXPECT_NE(validate(too_big), "");
 }

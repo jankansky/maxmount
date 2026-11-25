@@ -25,6 +25,9 @@ pdo_mapping:
   configure: true
   rx_index: 0x1600
   tx_index: 0x1A00
+  # Each PDO holds at most 64 bits (CANopen heritage): 0x1A00:00 = 7 entries / 168 bits was
+  # refused with abort 0x06040043. Longer lists are split over 0x1A00, 0x1A01, ...
+  max_pdo_bits: 64
 
 # Object dictionary checked with `slaveinfo eth0 -sdo` (fw v10): 0x60B1 velocity offset and
 # 0x60B2 torque offset do NOT exist, so CSP runs without feedforward; the drive derives
@@ -37,7 +40,7 @@ rx_pdo:                # master -> drive (7 bytes)
   - {index: 0x6060, sub: 0, type: i8,  field: mode}
   - {index: 0x607A, sub: 0, type: i32, field: target_position}
 
-tx_pdo:                # drive -> master (21 bytes, 7 entries)
+tx_pdo:                # drive -> master (21 bytes, 7 entries; 3 PDOs of <= 64 bits)
   - {index: 0x6041, sub: 0, type: u16, field: statusword}
   - {index: 0x6061, sub: 0, type: i8,  field: mode_display}
   - {index: 0x6064, sub: 0, type: i32, field: position_actual}

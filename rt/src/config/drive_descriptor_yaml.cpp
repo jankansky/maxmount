@@ -117,6 +117,10 @@ DriveDescriptor parse_drive_descriptor(const std::string& yaml_text) {
             if (m["configure"]) d.configure_pdo_mapping = m["configure"].as<bool>();
             if (m["rx_index"]) d.rx_mapping_index = to_uint<std::uint16_t>(m["rx_index"], "pdo_mapping.rx_index");
             if (m["tx_index"]) d.tx_mapping_index = to_uint<std::uint16_t>(m["tx_index"], "pdo_mapping.tx_index");
+            if (m["max_pdo_bits"]) d.max_pdo_bits = to_uint<std::uint16_t>(m["max_pdo_bits"], "pdo_mapping.max_pdo_bits");
+            if (m["max_pdo_entries"]) {
+                d.max_pdo_entries = to_uint<std::uint8_t>(m["max_pdo_entries"], "pdo_mapping.max_pdo_entries");
+            }
         }
         d.rx_pdo = to_entries(root["rx_pdo"], "rx_pdo");
         d.tx_pdo = to_entries(root["tx_pdo"], "tx_pdo");

@@ -45,15 +45,19 @@ bool is_input_field(PdoField f) noexcept {
 
 namespace {
 
+std::string hex16(std::uint16_t v) {
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "0x%04X", v);
+    return buf;
+}
+
 std::string check_list(const std::vector<PdoEntry>& entries, bool outputs,
                        std::initializer_list<PdoField> required, const char* what) {
     std::set<PdoField> seen;
     for (const auto& e : entries) {
         if (e.field == PdoField::None) continue;
         if (outputs ? !is_output_field(e.field) : !is_input_field(e.field)) {
-            char idx[16];
-            std::snprintf(idx, sizeof(idx), "0x%04X", e.index);
-            return std::string(what) + ": entry " + idx + " maps a field of the wrong direction";
+            return std::string(what) + ": entry " + hex16(e.index) + " maps a field of the wrong direction";
         }
         if (!seen.insert(e.field).second) {
             return std::string(what) + ": a field is mapped more than once";
@@ -84,26 +88,69 @@ std::string validate(const DriveDescriptor& d) {
     for (const auto& w : d.startup_sdo) {
         if (size_of(w.type) == 0) return "startup_sdo: invalid data type";
     }
+    if (d.max_pdo_bits > 0) {
+        for (const auto* list : {&d.rx_pdo, &d.tx_pdo}) {
+            for (const auto& e : *list) {
+                if (size_of(e.type) * 8 > d.max_pdo_bits) {
+                    return "PDO entry " + hex16(e.index) + " is larger than max_pdo_bits";
+                }
+            }
+        }
+    }
+    if (d.configure_pdo_mapping) {
+        // Split PDOs occupy consecutive mapping objects, which must stay inside the RxPDO
+        // (0x1600-0x17FF) or TxPDO (0x1A00-0x1BFF) mapping range.
+        const auto rx = split_pdos(d.rx_pdo, d.max_pdo_bits, d.max_pdo_entries).size();
+        const auto tx = split_pdos(d.tx_pdo, d.max_pdo_bits, d.max_pdo_entries).size();
+        if (rx > 0 && d.rx_mapping_index + rx - 1 > 0x17FF) return "rx_pdo needs more mapping objects than exist";
+        if (tx > 0 && d.tx_mapping_index + tx - 1 > 0x1BFF) return "tx_pdo needs more mapping objects than exist";
+    }
     return {};
+}
+
+std::vector<std::vector<PdoEntry>> split_pdos(const std::vector<PdoEntry>& entries,
+                                              std::uint16_t max_bits, std::uint8_t max_entries) {
+    std::vector<std::vector<PdoEntry>> pdos;
+    std::size_t bits = 0;
+    for (const auto& e : entries) {
+        const std::size_t b = size_of(e.type) * 8;
+        const bool full = !pdos.empty() && ((max_bits > 0 && bits + b > max_bits) ||
+                                            (max_entries > 0 && pdos.back().size() >= max_entries));
+        if (pdos.empty() || full) {
+            pdos.emplace_back();
+            bits = 0;
+        }
+        pdos.back().push_back(e);
+        bits += b;
+    }
+    return pdos;
 }
 
 std::vector<SdoWrite> pdo_mapping_sdos(const DriveDescriptor& d) {
     std::vector<SdoWrite> out;
     if (!d.configure_pdo_mapping) return out;
 
-    auto program = [&out](std::uint16_t assign, std::uint16_t map, const std::vector<PdoEntry>& entries) {
+    auto program = [&out, &d](std::uint16_t assign, std::uint16_t first_map,
+                              const std::vector<PdoEntry>& entries) {
+        const auto pdos = split_pdos(entries, d.max_pdo_bits, d.max_pdo_entries);
         out.push_back({assign, 0, DataType::U8, 0});  // disable SM assignment
-        out.push_back({map, 0, DataType::U8, 0});     // disable mapping object
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            const auto& e = entries[i];
-            const std::uint32_t value = (static_cast<std::uint32_t>(e.index) << 16) |
-                                        (static_cast<std::uint32_t>(e.subindex) << 8) |
-                                        static_cast<std::uint32_t>(size_of(e.type) * 8);
-            out.push_back({map, static_cast<std::uint8_t>(i + 1), DataType::U32, value});
+        for (std::size_t k = 0; k < pdos.size(); ++k) {
+            const auto map = static_cast<std::uint16_t>(first_map + k);
+            out.push_back({map, 0, DataType::U8, 0});  // disable mapping object
+            for (std::size_t i = 0; i < pdos[k].size(); ++i) {
+                const auto& e = pdos[k][i];
+                const std::uint32_t value = (static_cast<std::uint32_t>(e.index) << 16) |
+                                            (static_cast<std::uint32_t>(e.subindex) << 8) |
+                                            static_cast<std::uint32_t>(size_of(e.type) * 8);
+                out.push_back({map, static_cast<std::uint8_t>(i + 1), DataType::U32, value});
+            }
+            out.push_back({map, 0, DataType::U8, static_cast<std::int64_t>(pdos[k].size())});
         }
-        out.push_back({map, 0, DataType::U8, static_cast<std::int64_t>(entries.size())});
-        out.push_back({assign, 1, DataType::U16, map});
-        out.push_back({assign, 0, DataType::U8, 1});
+        for (std::size_t k = 0; k < pdos.size(); ++k) {
+            out.push_back({assign, static_cast<std::uint8_t>(k + 1), DataType::U16,
+                           static_cast<std::int64_t>(first_map + k)});
+        }
+        out.push_back({assign, 0, DataType::U8, static_cast<std::int64_t>(pdos.size())});
     };
     program(0x1C12, d.rx_mapping_index, d.rx_pdo);
     program(0x1C13, d.tx_mapping_index, d.tx_pdo);

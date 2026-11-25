@@ -64,8 +64,13 @@ struct DriveDescriptor {
     // If true, the PDO mapping below is written to the drive at PRE-OP -> SAFE-OP.
     // If false, rx_pdo / tx_pdo must describe the drive's existing (default) mapping.
     bool configure_pdo_mapping = true;
-    std::uint16_t rx_mapping_index = 0x1600;
-    std::uint16_t tx_mapping_index = 0x1A00;
+    std::uint16_t rx_mapping_index = 0x1600;  // first RxPDO mapping object
+    std::uint16_t tx_mapping_index = 0x1A00;  // first TxPDO mapping object
+    // Per-PDO limits (0 = none). A list longer than this is split, in order, across
+    // consecutive mapping objects (0x1A00, 0x1A01, ...), all assigned to the sync manager.
+    // Drives with CANopen heritage often limit each PDO to 64 bits.
+    std::uint16_t max_pdo_bits = 0;
+    std::uint8_t max_pdo_entries = 0;
     std::vector<PdoEntry> rx_pdo;  // master -> drive, in process-image order
     std::vector<PdoEntry> tx_pdo;  // drive -> master, in process-image order
     std::vector<SdoWrite> startup_sdo;
@@ -73,6 +78,11 @@ struct DriveDescriptor {
 
 // Returns an empty string if the descriptor is usable, otherwise a description of the problem.
 std::string validate(const DriveDescriptor& d);
+
+// Splits a PDO entry list into consecutive PDOs that respect max_pdo_bits / max_pdo_entries,
+// keeping the order (and therefore the process-image layout). Entry order is preserved.
+std::vector<std::vector<PdoEntry>> split_pdos(const std::vector<PdoEntry>& entries,
+                                              std::uint16_t max_bits, std::uint8_t max_entries);
 
 // The ordered SDO writes that program the PDO mapping objects and sync-manager assignment
 // (0x1C12 / 0x1C13). Empty if configure_pdo_mapping is false.
