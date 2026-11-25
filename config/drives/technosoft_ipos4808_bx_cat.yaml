@@ -12,7 +12,7 @@ identity:              # read with SOEM slaveinfo from "iPOS4808 BX-CAT v10", 20
   vendor_id: 0x000001A3    # Technosoft
   product_code: 0x019F418D
 
-modes: [csp]           # TODO: confirm mode 8 in 0x6502 (supported drive modes)
+modes: [csp]           # confirmed: 0x6502 bit 7
 
 sync:
   distributed_clocks: true   # confirmed: slaveinfo reports "Has DC: 1"
@@ -30,18 +30,19 @@ pdo_mapping:
 # 0x60B2 torque offset do NOT exist, so CSP runs without feedforward; the drive derives
 # velocity from successive position targets. 0x1C32/0x1C33 are absent too; SOEM configures
 # DC SYNC0 through ESC registers instead. 0x1600/0x1A00 take up to 8 entries each.
+# 0x603F (error code) exists but is NOT PDO-mappable (SDO write to 0x1A00 refused); read it by
+# SDO after a fault instead. 0x6502 = 0x000303E5: PP, PV, HM, IP, CSP, CSV and CST supported.
 rx_pdo:                # master -> drive (7 bytes)
   - {index: 0x6040, sub: 0, type: u16, field: controlword}
   - {index: 0x6060, sub: 0, type: i8,  field: mode}
   - {index: 0x607A, sub: 0, type: i32, field: target_position}
 
-tx_pdo:                # drive -> master (23 bytes, 8 entries)
+tx_pdo:                # drive -> master (21 bytes, 7 entries)
   - {index: 0x6041, sub: 0, type: u16, field: statusword}
   - {index: 0x6061, sub: 0, type: i8,  field: mode_display}
   - {index: 0x6064, sub: 0, type: i32, field: position_actual}
   - {index: 0x606C, sub: 0, type: i32, field: velocity_actual}
   - {index: 0x6077, sub: 0, type: i16, field: torque_actual}
-  - {index: 0x603F, sub: 0, type: u16, field: error_code}
   - {index: 0x60F4, sub: 0, type: i32, field: following_error}
   - {index: 0x60FD, sub: 0, type: u32, field: digital_inputs}
 

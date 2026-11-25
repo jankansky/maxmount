@@ -96,9 +96,16 @@ struct SoemFieldbus::Impl {
         const int wkc = ecx_SDOwrite(&ctx, slave, w.index, w.subindex, FALSE, size, buf, EC_TIMEOUTRXM);
         if (wkc <= 0) {
             char msg[96];
-            std::snprintf(msg, sizeof(msg), "slave %u: SDO write 0x%04X:%02X failed; ", slave, w.index,
-                          w.subindex);
+            std::snprintf(msg, sizeof(msg), "slave %u: SDO write 0x%04X:%02X = 0x%llX failed", slave,
+                          w.index, w.subindex, static_cast<unsigned long long>(w.value));
             error += msg;
+            // The drive's SDO abort code says why (e.g. "object cannot be mapped to the PDO").
+            if (ecx_iserror(&ctx)) {
+                std::string why = ecx_elist2string(&ctx);
+                while (!why.empty() && (why.back() == '\n' || why.back() == ' ')) why.pop_back();
+                error += ": " + why;
+            }
+            error += "; ";
             return false;
         }
         return true;

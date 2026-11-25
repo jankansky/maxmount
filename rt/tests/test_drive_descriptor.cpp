@@ -124,12 +124,12 @@ TEST(DriveDescriptorYaml, RejectsBadInput) {
 TEST(DriveDescriptorYaml, RepositoryDescriptorsLoad) {
     const auto ipos = config::load_drive_descriptor(MAXMOUNT_CONFIG_DIR "/drives/technosoft_ipos4808_bx_cat.yaml");
     EXPECT_EQ(ipos.rx_pdo.size(), 3u);
-    EXPECT_EQ(ipos.tx_pdo.size(), 8u);
+    EXPECT_EQ(ipos.tx_pdo.size(), 7u);
     EXPECT_EQ(ipos.startup_sdo.size(), 2u);
     EXPECT_EQ(ipos.vendor_id, 0x000001A3u);  // read from the drive with slaveinfo
     EXPECT_EQ(ipos.product_code, 0x019F418Du);
     EXPECT_EQ(PdoCodec(ipos).output_size(), 7u);
-    EXPECT_EQ(PdoCodec(ipos).input_size(), 23u);
+    EXPECT_EQ(PdoCodec(ipos).input_size(), 21u);
 
     const auto sim = config::load_drive_descriptor(MAXMOUNT_CONFIG_DIR "/drives/sim_cia402.yaml");
     EXPECT_FALSE(sim.configure_pdo_mapping);
