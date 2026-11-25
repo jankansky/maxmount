@@ -34,6 +34,8 @@ enum class PdoField : std::uint8_t {
     VelocityActual,
     TorqueActual,
     ErrorCode,
+    FollowingError,
+    DigitalInputs,
 };
 
 bool is_output_field(PdoField f) noexcept;

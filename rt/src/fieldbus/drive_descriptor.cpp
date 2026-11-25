@@ -36,7 +36,9 @@ bool is_input_field(PdoField f) noexcept {
         case PdoField::PositionActual:
         case PdoField::VelocityActual:
         case PdoField::TorqueActual:
-        case PdoField::ErrorCode: return true;
+        case PdoField::ErrorCode:
+        case PdoField::FollowingError:
+        case PdoField::DigitalInputs: return true;
         default: return false;
     }
 }
@@ -167,6 +169,8 @@ void PdoCodec::decode(const std::uint8_t* src, Cia402Inputs& in) const noexcept 
             case PdoField::VelocityActual: in.velocity_actual = static_cast<std::int32_t>(v); break;
             case PdoField::TorqueActual: in.torque_actual = static_cast<std::int16_t>(v); break;
             case PdoField::ErrorCode: in.error_code = static_cast<std::uint16_t>(v); break;
+            case PdoField::FollowingError: in.following_error = static_cast<std::int32_t>(v); break;
+            case PdoField::DigitalInputs: in.digital_inputs = static_cast<std::uint32_t>(v); break;
             default: break;
         }
     }

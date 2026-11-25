@@ -123,13 +123,36 @@ TEST(DriveDescriptorYaml, RejectsBadInput) {
 
 TEST(DriveDescriptorYaml, RepositoryDescriptorsLoad) {
     const auto ipos = config::load_drive_descriptor(MAXMOUNT_CONFIG_DIR "/drives/technosoft_ipos4808_bx_cat.yaml");
-    EXPECT_EQ(ipos.rx_pdo.size(), 5u);
-    EXPECT_EQ(ipos.tx_pdo.size(), 6u);
+    EXPECT_EQ(ipos.rx_pdo.size(), 3u);
+    EXPECT_EQ(ipos.tx_pdo.size(), 8u);
+    EXPECT_EQ(ipos.startup_sdo.size(), 2u);
     EXPECT_EQ(ipos.vendor_id, 0x000001A3u);  // read from the drive with slaveinfo
     EXPECT_EQ(ipos.product_code, 0x019F418Du);
-    EXPECT_EQ(PdoCodec(ipos).output_size(), 13u);
-    EXPECT_EQ(PdoCodec(ipos).input_size(), 15u);
+    EXPECT_EQ(PdoCodec(ipos).output_size(), 7u);
+    EXPECT_EQ(PdoCodec(ipos).input_size(), 23u);
 
     const auto sim = config::load_drive_descriptor(MAXMOUNT_CONFIG_DIR "/drives/sim_cia402.yaml");
     EXPECT_FALSE(sim.configure_pdo_mapping);
+}
+
+TEST(PdoCodec, DecodesFollowingErrorAndDigitalInputs) {
+    const auto d = config::parse_drive_descriptor(R"(
+rx_pdo:
+  - {index: 0x6040, type: u16, field: controlword}
+  - {index: 0x607A, type: i32, field: target_position}
+tx_pdo:
+  - {index: 0x6041, type: u16, field: statusword}
+  - {index: 0x6064, type: i32, field: position_actual}
+  - {index: 0x60F4, type: i32, field: following_error}
+  - {index: 0x60FD, type: u32, field: digital_inputs}
+)");
+    const PdoCodec codec(d);
+    ASSERT_EQ(codec.input_size(), 14u);
+    const std::array<std::uint8_t, 14> buf = {0x37, 0x02, 0, 0, 0, 0,
+                                              0xF6, 0xFF, 0xFF, 0xFF,   // -10
+                                              0x05, 0x00, 0x01, 0x80};  // 0x80010005
+    Cia402Inputs in;
+    codec.decode(buf.data(), in);
+    EXPECT_EQ(in.following_error, -10);
+    EXPECT_EQ(in.digital_inputs, 0x80010005u);
 }

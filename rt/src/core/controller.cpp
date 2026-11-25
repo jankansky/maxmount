@@ -145,6 +145,8 @@ void Controller::cycle(nanos t_now, double dt) noexcept {
         at.act_pos = act;
         at.statusword = in.statusword;
         at.error_code = in.error_code;
+        at.following_error = in.following_error;
+        at.digital_inputs = in.digital_inputs;
         at.state = ax.master.state();
         at.flags = flags;
         at.buffered = static_cast<std::uint32_t>(ax.traj.size());

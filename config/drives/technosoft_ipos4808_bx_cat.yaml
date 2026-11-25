@@ -12,7 +12,7 @@ identity:              # read with SOEM slaveinfo from "iPOS4808 BX-CAT v10", 20
   vendor_id: 0x000001A3    # Technosoft
   product_code: 0x019F418D
 
-modes: [csp]           # TODO: confirm firmware supports mode 8 (CSP)
+modes: [csp]           # TODO: confirm mode 8 in 0x6502 (supported drive modes)
 
 sync:
   distributed_clocks: true   # confirmed: slaveinfo reports "Has DC: 1"
@@ -26,28 +26,35 @@ pdo_mapping:
   rx_index: 0x1600
   tx_index: 0x1A00
 
-rx_pdo:                # master -> drive
+# Object dictionary checked with `slaveinfo eth0 -sdo` (fw v10): 0x60B1 velocity offset and
+# 0x60B2 torque offset do NOT exist, so CSP runs without feedforward; the drive derives
+# velocity from successive position targets. 0x1C32/0x1C33 are absent too; SOEM configures
+# DC SYNC0 through ESC registers instead. 0x1600/0x1A00 take up to 8 entries each.
+rx_pdo:                # master -> drive (7 bytes)
   - {index: 0x6040, sub: 0, type: u16, field: controlword}
   - {index: 0x6060, sub: 0, type: i8,  field: mode}
   - {index: 0x607A, sub: 0, type: i32, field: target_position}
-  - {index: 0x60B1, sub: 0, type: i32, field: velocity_offset}   # TODO: confirm support
-  - {index: 0x60B2, sub: 0, type: i16, field: torque_offset}     # TODO: confirm support
 
-tx_pdo:                # drive -> master
+tx_pdo:                # drive -> master (23 bytes, 8 entries)
   - {index: 0x6041, sub: 0, type: u16, field: statusword}
   - {index: 0x6061, sub: 0, type: i8,  field: mode_display}
   - {index: 0x6064, sub: 0, type: i32, field: position_actual}
   - {index: 0x606C, sub: 0, type: i32, field: velocity_actual}
   - {index: 0x6077, sub: 0, type: i16, field: torque_actual}
   - {index: 0x603F, sub: 0, type: u16, field: error_code}
+  - {index: 0x60F4, sub: 0, type: i32, field: following_error}
+  - {index: 0x60FD, sub: 0, type: u32, field: digital_inputs}
 
 capabilities:
-  velocity_offset: unverified
-  torque_offset: unverified
+  velocity_offset: false
+  torque_offset: false
 
 units:
   # TODO: iPOS velocity objects use internal units (position counts per slow-loop sample).
   # Record the slow-loop period here so velocity feedforward can be scaled correctly.
   velocity: internal
 
-startup_sdo: []        # e.g. interpolation time period, following-error window
+startup_sdo:           # written at PRE-OP -> SAFE-OP, before the PDO mapping
+  # Interpolation time period 0x60C2 = 1 x 10^-3 s; must match the mount-rt cycle.
+  - {index: 0x60C2, sub: 1, type: u8, value: 1}
+  - {index: 0x60C2, sub: 2, type: i8, value: -3}

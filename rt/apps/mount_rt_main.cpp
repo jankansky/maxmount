@@ -228,8 +228,9 @@ int main(int argc, char** argv) {
             for (std::size_t i = 0; i < axes.size(); ++i) {
                 const AxisTelemetry& a = last.axes[i];
                 if (hardware) {
-                    std::printf(" %s %-18s sw 0x%04x err 0x%04x pos %11.0f |", axes[i].name.c_str(),
-                                cia402::to_string(a.state), a.statusword, a.error_code, a.act_pos);
+                    std::printf(" %s %-18s sw 0x%04x err 0x%04x pos %11.0f ferr %6d di 0x%08x |",
+                                axes[i].name.c_str(), cia402::to_string(a.state), a.statusword,
+                                a.error_code, a.act_pos, a.following_error, a.digital_inputs);
                 } else {
                     std::printf(" %s %-16s act %8.3f deg err %7.2f\" flags 0x%02x |", axes[i].name.c_str(),
                                 cia402::to_string(a.state), a.act_pos / kDeg, max_err[i] / kArcsec, a.flags);

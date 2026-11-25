@@ -33,6 +33,8 @@ struct Cia402Inputs {
     std::int32_t velocity_actual = 0;   // 0x606C
     std::int16_t torque_actual = 0;     // 0x6077
     std::uint16_t error_code = 0;       // 0x603F
+    std::int32_t following_error = 0;   // 0x60F4
+    std::uint32_t digital_inputs = 0;   // 0x60FD (limit and home switches in bits 0-2)
 };
 
 struct FieldbusStats {

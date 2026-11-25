@@ -62,6 +62,8 @@ PdoField to_field(const YAML::Node& n) {
     if (s == "velocity_actual") return PdoField::VelocityActual;
     if (s == "torque_actual") return PdoField::TorqueActual;
     if (s == "error_code") return PdoField::ErrorCode;
+    if (s == "following_error") return PdoField::FollowingError;
+    if (s == "digital_inputs") return PdoField::DigitalInputs;
     fail("unknown PDO field '" + s + "'");
 }
 

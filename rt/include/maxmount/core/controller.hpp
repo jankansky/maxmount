@@ -49,6 +49,8 @@ struct AxisTelemetry {
     double act_pos = 0.0;  // rad, actual at t
     std::uint16_t statusword = 0;
     std::uint16_t error_code = 0;
+    std::int32_t following_error = 0;  // drive counts, if mapped
+    std::uint32_t digital_inputs = 0;  // raw 0x60FD, if mapped
     cia402::State state = cia402::State::Unknown;
     std::uint8_t flags = 0;
     std::uint32_t buffered = 0;
