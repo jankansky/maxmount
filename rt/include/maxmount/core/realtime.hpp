@@ -34,8 +34,11 @@ class CyclicLoop {
 public:
     explicit CyclicLoop(nanos period) : period_(period) {}
 
-    // Calls body() once per period. If body returns a value, it is added to the next wake-up
-    // time (used to phase-lock to an EtherCAT distributed clock).
+    // Calls body(scheduled) once per period, where `scheduled` is the CLOCK_MONOTONIC time
+    // the cycle was due to start. Use it, not the actual wake-up time, as the cycle's time
+    // stamp: wake-up jitter would otherwise turn into position-command noise. If body returns
+    // a value, it is added to the next wake-up time (used to phase-lock to an EtherCAT
+    // distributed clock).
     template <typename Body>
     void run(const std::atomic<bool>& stop, Body&& body) {
         nanos next = monotonic_ns() + period_;
@@ -46,10 +49,10 @@ public:
                 stats_.max_wake_latency_ns.store(latency, std::memory_order_relaxed);
             }
             nanos correction = 0;
-            if constexpr (std::is_void_v<std::invoke_result_t<Body&>>) {
-                body();
+            if constexpr (std::is_void_v<std::invoke_result_t<Body&, nanos>>) {
+                body(next);
             } else {
-                correction = static_cast<nanos>(body());
+                correction = static_cast<nanos>(body(next));
             }
             stats_.cycles.fetch_add(1, std::memory_order_relaxed);
             next += period_ + correction;

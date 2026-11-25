@@ -47,7 +47,8 @@ if (MAXMOUNT_WITH_SOEM)
     FetchContent_Declare(soem
             GIT_REPOSITORY https://github.com/OpenEtherCATsociety/SOEM.git
             GIT_TAG v2.0.1
-            GIT_SHALLOW TRUE)
+            GIT_SHALLOW TRUE
+            SYSTEM)  # treat SOEM headers as system headers: no warnings from third-party code
     FetchContent_MakeAvailable(soem)
 
     add_library(maxmount_soem src/fieldbus/soem/soem_fieldbus.cpp)
@@ -83,6 +84,7 @@ if (MAXMOUNT_BUILD_TESTS)
             tests/test_spsc_ring.cpp
             tests/test_controller.cpp
             tests/test_drive_descriptor.cpp
+            tests/test_cyclic_loop.cpp
     )
     target_link_libraries(maxmount_rt_tests PRIVATE maxmount::config GTest::gtest_main)
     target_compile_definitions(maxmount_rt_tests PRIVATE

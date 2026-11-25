@@ -165,8 +165,12 @@ int main(int argc, char** argv) {
     std::thread rt_thread([&] {
         const RealtimeSetup rs = configure_realtime_thread(opt.rt_priority, opt.rt_cpu);
         std::printf("rt thread: %s\n", rs.message.c_str());
-        loop.run(g_stop, [&]() -> nanos {
-            controller->cycle(realtime_ns(), dt);
+        // Commands are evaluated at the scheduled cycle time on the UTC (CLOCK_REALTIME)
+        // scale. The offset is fixed at start-up; tying it to the drives' distributed clock
+        // and PPS-disciplined UTC is a later step.
+        const nanos mono_to_utc = realtime_ns() - monotonic_ns();
+        loop.run(g_stop, [&](nanos scheduled) -> nanos {
+            controller->cycle(scheduled + mono_to_utc, dt);
             return bus->cycle_correction_ns();
         });
     });

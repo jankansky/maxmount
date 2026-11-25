@@ -133,3 +133,21 @@ TEST_F(ControllerTest, FollowingErrorFaultNeedsReset) {
     s = step(50);
     EXPECT_EQ(s.axes[0].state, cia402::State::OperationEnabled);
 }
+
+// The controller must be fed the scheduled cycle time, not the jittered wake-up time: then a
+// feasible trajectory passes through the limiter untouched on every cycle.
+TEST_F(ControllerTest, FeasibleTrajectoryIsNeverLimited) {
+    const Profile p{60 * kPi / 180, 2 * kPi / 20.0};  // the mount-rt demo az profile
+    push_profile(p, 0.0, 10.0);
+    ctl->post({CommandType::Enable, 0, {}});
+    step(200);
+    int limited = 0;
+    for (int i = 0; i < 8000; ++i) {
+        ctl->cycle(t, kDt);
+        t += kPeriod;
+        while (auto s = ctl->poll_telemetry()) {
+            if (s->axes[0].flags & axis_flags::Limited) ++limited;
+        }
+    }
+    EXPECT_EQ(limited, 0);
+}
