@@ -134,7 +134,31 @@ only the site terms.
 - **Locked primary:** no commercial mirror-lock kit for the standard C8 was found; options are a DIY clamp or an EdgeHD 8. Until then, flip-side pointing terms and the camera loop absorb mirror shift.
 - **Focuser:** at f/10 the critical focus zone is about 270 µm, so any external focuser with 5–10 µm steps suffices; load capacity, low tilt and a temperature sensor matter more. Candidates: Starlight Feather Touch with MicroTouch motor, MoonLite CSL, PrimaLuce Esatto, or a crayford driven by a CiA 402 stepper drive on EtherCAT.
 - **Autofocus:** half-flux-radius curve fit; triggered by temperature change, filter change, side flip, elapsed time and before scheduled passes; learned µm/°C compensation between runs.
-- **Rotator:** deferred. The design leaves room for a third CSP axis for field derotation.
+- **Rotator:** needed early; see [Field rotator](#field-rotator).
+
+## Field rotator
+
+On an alt-az mount the field turns during an exposure at
+ω = ω⊕ · cos(latitude) · cos(az) / cos(el). At 40° latitude: 0 due east or west, 0.0042 °/s
+(15°/h) on the meridian at 40° elevation, 0.0064 °/s at 60°, 0.037 °/s at 85°. With a C8 at f/10
+and an ASI533-class sensor (3.76 µm pixels, 8 mm centre to corner), one pixel of smear at the
+corner is 0.027°. Without a rotator, sub-exposures near the meridian are therefore limited to a
+few seconds. That makes a rotator a requirement for deep-sky imaging, not an option.
+
+Requirements: continuous, smooth motion during the exposure with 0.01–0.02° tracking error; up
+to ~0.04 °/s (long exposures within ~5° of the zenith stay impractical); continuous rotation or
+enough range to plan around (more than 180° per night, plus 180° when the mount goes over the
+top); low backlash; a known zero; ~1 kg load; fits the back-focus budget.
+
+| | A. Third EtherCAT axis (preferred end state) | B. Commercial USB rotator (quickest) |
+| --- | --- | --- |
+| Hardware | Large-bore bearing with belt or worm, small servo or stepper with encoder, any small CiA 402 EtherCAT drive | Off the shelf (e.g. Pegasus Astro Falcon, Optec Pyxis/Gemini, ZWO CAA); check step size, backlash, load, back focus and Linux driver |
+| Software | `mount-rt` already handles up to four axes from drive descriptors; `mount-svc` streams a `rot` trajectory with az and el, sharing timing, limits, following-error trip and telemetry | A `rotator-svc` sends position updates at ~1 Hz through INDI or the vendor protocol |
+| Derotation | Synchronised with the mount at 1 kHz on the same clock | Adequate if it moves smoothly in fine steps |
+
+`mount-svc` computes the rotator angle as the parallactic angle, plus 180° on the flipped
+(over-the-top) branch, plus the camera's position-angle offset. For satellites the rotator can
+instead align the frame with the direction of motion.
 
 ## Safety and autonomy
 
@@ -143,9 +167,60 @@ only the site terms.
 | Hardware | E-stop wired to iPOS STO inputs; hardware limit switches; brake if the tube is unbalanced |
 | Drive | EtherCAT sync-manager watchdog triggers quick stop on lost communication |
 | `mount-rt` | Soft limits, cable wrap, rate clamps, trajectory-starvation stop, heartbeat timeout |
-| `mount-svc` | Horizon mask, sun avoidance as a hard veto, clock-quality gate, pass feasibility checks |
+| `mount-rt` (planned) | Sun keep-out zone enforced on every motion (slews, camera-loop corrections, hand offsets), required before any daytime imaging |
+| `mount-svc` | Horizon mask, sun avoidance as a hard veto on plans, clock-quality gate, pass feasibility checks |
 | Safety supervisor | Weather, UPS and heartbeat inputs trigger park (and close, once an enclosure exists); independent of GUI and network |
 | Remote access | WireGuard or Tailscale, no open ports; network power switch; full logging |
+
+## Operations and GUI
+
+**Custom GUI, standard protocols.** Everything that makes this system distinctive has no
+existing open-source GUI: fast movers, prediction combined with closed-loop camera tracking, a
+1 kHz trajectory mount. Satellite tools such as Gpredict send coarse az/el commands to slow radio
+rotators. Deep-sky sequencing is the exception: KStars/Ekos (INDI) and N.I.N.A. (ASCOM) are mature.
+So the GUI is custom, and the mount also gets an **ASCOM Alpaca and INDI driver** early. That lets
+those tools run deep-sky sequences from day one and sets the bar for the built-in sequencer.
+
+**One engine, many target sources.** Every activity is "predict where to point, then correct
+with a camera":
+
+| Source | Prediction | Correction |
+| --- | --- | --- |
+| Star, galaxy | RA/Dec via ERFA | Pointing model, guiding |
+| Satellite | TLE via SGP4 | Along-track time and cross-track offsets from the camera loop |
+| Conjunction (CelesTrak SOCRATES) | Both TLEs, time of closest approach | Schedule both objects around that time |
+| Aircraft | ADS-B position and velocity (RTL-SDR + readsb), extrapolated over the data latency | Camera loop |
+| Bird (e.g. hawk) | None: the widefield camera detects it | Camera loop only (visual servoing) |
+
+A **sequence/campaign engine** on top of `mount-svc` runs astrophotography sequences ("M31,
+30 s subs, 2 h, refocus on temperature change") and tracking campaigns ("every pass of X
+tonight", "the top SOCRATES conjunctions within reach"). It honours the same horizon, Sun,
+clock and limit checks.
+
+**GUI architecture.** A browser app on the laptop, served by `gui-gateway` on the Pi, which
+bridges WebSocket to Zenoh. The browser never talks to Zenoh or `mount-rt` directly, so
+authentication and a single-controller lock live in one place. Local network first. Remote
+access only through a VPN (WireGuard/Tailscale) plus login, never an exposed port. Laptop-only,
+so dense, full-featured layouts are fine.
+
+**Panels, in build order:**
+
+1. Status bar, always visible: service state, target, drives, clock error, GPS, Sun distance, connection; STOP and HOLD.
+2. Sky view: all-sky az/el with horizon mask, mount, target, planned track, Sun, Moon, upcoming passes, keyhole zone.
+3. Target: name search (bright stars, Messier/NGC, planets), RA/Dec, az/el go-to, park.
+4. Satellites: TLE groups from CelesTrak, pass table (time, max elevation, plan mode, peak rates, countdown), track a pass.
+5. Tracking control: along-track and cross-track adjustments, az/el pad with step sizes, reset.
+6. Telemetry: command vs actual, following error, loop latency, bus errors.
+7. Drives (commissioning and maintenance): states, decoded faults, reset, limit and home inputs, supervised jog.
+8. Cameras: widefield and narrow previews, click to center, detection overlay.
+9. Sequences and campaigns; pointing model runs and residuals; rotator.
+
+Dark theme by default with a red night mode. Monospace figures for positions and times.
+Safety-critical state is never more than a glance away.
+
+**Compute.** Widefield motion detection fits on the Pi 4. Recording high-rate narrow-field
+video needs a USB 3 SSD. Machine-learning detection (bird or not) needs an accelerator (Coral,
+Hailo) or runs on the laptop. The camera service publishes over Zenoh, so either placement works.
 
 ## Genericity and portability
 
@@ -180,14 +255,20 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 2. **Drive bring-up:** EasyMotion Studio setup (az sin/cos + Halls, el dual-loop), tuning, homing, encoder count-rate checks. *Gate:* both axes jog and home reliably.
 3. **Real-time controller:** `mount-rt` with SOEM CSP, trajectory buffer, limits, telemetry, simulated backend. *Gate:* multi-hour 1 kHz run with zero lost frames.
 4. **Astronomy and pointing:** ERFA, sidereal tracking, automated pointing model. *Gate:* site refit under 10 minutes with arcsecond-class residuals.
-5. **Satellites:** SGP4, pass planner with flip mode, open-loop passes. *Gate:* ISS pass kept within the widefield field.
-6. **Closed loop:** widefield acquisition, ZWO ROI tracking, offset corrections. *Gate:* target held in the C8 field for a full pass.
-7. **Observatory:** focuser and autofocus, weather, power, safety supervisor. *Gate:* fault-injection suite passes.
-8. **GUI and scheduler:** web GUI, night queue, unattended operation. *Gate:* a full night without intervention.
+5. **Satellites:** SGP4, pass planner with over-the-top mode, open-loop passes. *Gate:* ISS pass kept within the widefield field.
+6. **GUI core:** gateway, status bar, sky view, targets, satellites, tracking control, telemetry, drives panel. *Gate:* a pass and a star tracked from the GUI alone.
+7. **Field rotator:** rotator axis or service, parallactic-angle derotation. *Gate:* 120 s subframes at 60° elevation with ≤ 1 px corner smear.
+8. **Interoperability:** ASCOM Alpaca/INDI mount driver. *Gate:* an Ekos or N.I.N.A. sequence runs end to end.
+9. **Closed loop:** widefield acquisition, ZWO ROI tracking, offset corrections. *Gate:* target held in the C8 field for a full pass.
+10. **Daytime safety:** Sun keep-out in `mount-rt` for all motion. *Gate:* no motion command, slew or offset can enter the zone.
+11. **Sequencer and campaigns:** astrophotography sequences, SOCRATES campaigns. *Gate:* a full night without intervention.
+12. **Fast movers:** ADS-B source; visual tracking with widefield detection. *Gate:* an aircraft and a bird held in the C8 field.
+13. **Observatory:** focuser and autofocus, weather, power, safety supervisor. *Gate:* fault-injection suite passes.
 
 ## Open items and risks
 
-- [ ] Confirm iPOS4808 BX-CAT firmware supports CSP (mode 8) and objects 0x60B1/0x60B2.
+- [x] iPOS4808 BX-CAT firmware supports CSP (0x6502 bit 7). It has no 0x60B1/0x60B2, so CSP runs without feedforward. Each PDO holds at most 64 bits.
+- [ ] Choose the field rotator: third EtherCAT axis or commercial USB rotator.
 - [ ] Confirm the iPOS accepts the ADRT sin/cos signal directly; record the encoder line count.
 - [ ] Check REE2000 max output frequency and drive encoder input bandwidth against worst-case elevation rate.
 - [ ] Measure azimuth cable-wrap travel allowed by the through-axis cables.
