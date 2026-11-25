@@ -197,6 +197,53 @@ These come from the manufacturer's curves at first and are later measured (photo
 curve from flats and bias frames). The GUI shows Off (manual), Signal (gain only) or Signal
 and seeing, the current r₀ and τ₀, and a histogram with the target level marked.
 
+### Camera characterisation and calibration library
+
+Both cameras get the same two features, run by `camera-svc` and scheduled like any other task.
+
+**Characterisation (photon transfer curve).** For each gain step:
+- **Bias:** pairs of minimum-exposure dark frames. Read noise = σ(pair difference)/√2.
+- **Exposure sweep of a stable, uniform source** (flat panel, or a fixed twilight field):
+  frame pairs at increasing exposure up to saturation. Differencing each pair removes fixed
+  pattern noise.
+
+The variance-versus-mean curve gives:
+- the conversion gain K (e⁻/ADU) from its shot-noise slope;
+- read noise in electrons;
+- full well and the saturation point, where the variance turns over;
+- linearity;
+- the high-conversion-gain switch, seen as a step in read noise against gain.
+
+Darks at several exposures and sensor temperatures give the dark current and its temperature
+dependence (the ZWO planetary cameras are uncooled). The same frames map hot pixels and amp glow.
+The result is a versioned camera profile, tied to the serial number, firmware, bit depth, ADC
+mode and offset. It replaces the manufacturer's curves that automatic exposure and gain start
+with. The GUI plots the photon transfer curve and read noise and K against gain, with grid
+lines like every chart.
+
+**Calibration library.** Master bias, dark and flat frames (sigma-clipped medians), indexed by:
+camera, gain step, offset, bit depth, ROI and binning, exposure, sensor temperature band, rotator
+angle and filter (flats only), and date.
+- **Coverage drives the rest.** Automatic exposure and gain only use gain steps the library
+  covers, and processing picks matching masters automatically.
+- **"Collect missing" automation:**
+  - The library computes which frames tonight's plan needs: planned gains, exposures, ROIs and
+    the expected temperature.
+  - It collects darks and bias when the optics are covered: a motorised cover or flip-flat panel
+    (ASCOM/INDI) for unattended runs, otherwise a prompt.
+  - Each dark is checked against the expected dark signal, and frames with light leaks are
+    rejected.
+  - Twilight sky flats are taken automatically near the anti-solar point, with the Sun between
+    about −2° and −8°. Exposure is adjusted to a target level, the mount is dithered between
+    frames, and the Sun keep-out zone applies.
+  - Flats are also taken with a flat panel when there is one.
+- **Freshness rules:** masters are re-collected after a temperature change beyond a set band,
+  after a camera settings or firmware change, after a set age, and for flats after the optical
+  train or rotator is moved.
+- **Rotator angle matters for flats.** Dust on the camera side rotates with the camera, while
+  vignetting from the telescope stays fixed. Flats are therefore taken at the rotator angles a
+  session will use, or modelled as a fixed part and a rotating part.
+
 ## Recording and frame processing
 
 **Recording.** Narrow-field ROI frames are written losslessly as SER (the format planetary and
@@ -313,7 +360,8 @@ so dense, full-featured layouts are fine.
 7. Drives (commissioning and maintenance): states, decoded faults, reset, limit and home inputs, supervised jog.
 8. Cameras: widefield and narrow-field views with overlays, click to point, record, with the corrections bar beneath them.
 9. Recordings: replay with telemetry, movie export, planetary and satellite processing jobs.
-10. Sequences and campaigns; pointing model runs and residuals; rotator.
+10. Calibration: camera characterisation (photon transfer curve, read noise and gain plots), calibration library coverage, "collect missing", freshness.
+11. Sequences and campaigns; pointing model runs and residuals; rotator.
 
 Dark theme by default with a red night mode. Monospace figures for positions and times.
 Safety-critical state is never more than a glance away.
@@ -360,7 +408,7 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 7. **Field rotator:** rotator axis or service, parallactic-angle derotation. *Gate:* 120 s subframes at 60° elevation with ≤ 1 px corner smear.
 8. **Interoperability:** ASCOM Alpaca/INDI mount driver. *Gate:* an Ekos or N.I.N.A. sequence runs end to end.
 9. **Closed loop:** camera service with calibrated geometry, widefield acquisition, ZWO ROI tracking, offset corrections. *Gate:* target held in the C8 field for a full pass.
-10. **Recording and processing:** SER recording with sidecar telemetry, replay and movie export, planetary and satellite processing modes. *Gate:* a processed ISS pass movie with windows set from the pose rate.
+10. **Recording and processing:** SER recording with sidecar telemetry, replay and movie export, camera characterisation and calibration library, automatic exposure and gain, planetary and satellite processing modes. *Gate:* a processed ISS pass movie with windows set from the pose rate, calibrated from the library.
 11. **Daytime safety:** Sun keep-out in `mount-rt` for all motion. *Gate:* no motion command, slew or offset can enter the zone.
 12. **Sequencer and campaigns:** astrophotography sequences, SOCRATES campaigns. *Gate:* a full night without intervention.
 13. **Fast movers:** ADS-B source; visual tracking with widefield detection. *Gate:* an aircraft and a bird held in the C8 field.
@@ -371,7 +419,8 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 - [x] iPOS4808 BX-CAT firmware supports CSP (0x6502 bit 7). It has no 0x60B1/0x60B2, so CSP runs without feedforward. Each PDO holds at most 64 bits.
 - [ ] Choose the field rotator: third EtherCAT axis or commercial USB rotator.
 - [ ] Choose the ZWO camera for high-rate ROI capture and check its frame rate at the planned ROI and bit depth; size the recording SSD.
-- [ ] Measure the chosen ZWO camera's photon transfer curve (read noise, e⁻/ADU, full well against gain, HCG switch point) for automatic exposure and gain.
+- [ ] Measure the chosen ZWO camera's photon transfer curve (read noise, e⁻/ADU, full well against gain, HCG switch point) for automatic exposure and gain (the characterisation feature does this).
+- [ ] Choose a light-tight cover for unattended darks: a motorised cap or a flip-flat panel (which also gives flats), with an ASCOM/INDI driver.
 - [ ] Confirm the iPOS accepts the ADRT sin/cos signal directly; record the encoder line count.
 - [ ] Check REE2000 max output frequency and drive encoder input bandwidth against worst-case elevation rate.
 - [ ] Measure azimuth cable-wrap travel allowed by the through-axis cables.
