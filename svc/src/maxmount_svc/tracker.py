@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from dataclasses import dataclass
 
@@ -49,8 +50,11 @@ class MoveProfile:
         return self.p0 + self.dir * s, self.dir * v
 
 
-def plan_points(plan: Plan, t0_ns: int, t1_ns: int, step_ns: int) -> dict[str, list[tuple[int, float, float]]]:
-    """Time-tagged positions and velocities (central differences) from a plan."""
+def plan_points(
+    plan: Plan, t0_ns: int, t1_ns: int, step_ns: int, d_az: float = 0.0, d_el: float = 0.0
+) -> dict[str, list[tuple[int, float, float]]]:
+    """Time-tagged positions and velocities (central differences) from a plan, plus constant
+    axis offsets (rad)."""
     t = np.arange(t0_ns, t1_ns + 1, step_ns, dtype=np.int64)
     if len(t) == 0:
         return {a: [] for a in AXES}
@@ -63,8 +67,8 @@ def plan_points(plan: Plan, t0_ns: int, t1_ns: int, step_ns: int) -> dict[str, l
     va = (a_p - a_m) / (2 * h / NS)
     ve = (e_p - e_m) / (2 * h / NS)
     return {
-        "az": list(zip(t.tolist(), a.tolist(), va.tolist())),
-        "el": list(zip(t.tolist(), e.tolist(), ve.tolist())),
+        "az": list(zip(t.tolist(), (a + d_az).tolist(), va.tolist())),
+        "el": list(zip(t.tolist(), (e + d_el).tolist(), ve.tolist())),
     }
 
 
@@ -87,16 +91,24 @@ class Slew:
         return out
 
 
-def plan_slew(plan: Plan, start: dict[str, float], now_ns: int, tracking: Tracking, lead_s: float = 0.5) -> Slew:
-    """Slew from `start` to where the plan will be when the slew ends, joining the plan at the
-    later of its start and the slew's arrival."""
+def plan_slew(
+    plan: Plan,
+    start: dict[str, float],
+    now_ns: int,
+    tracking: Tracking,
+    lead_s: float = 0.5,
+    offsets: tuple[float, float] = (0.0, 0.0),
+) -> Slew:
+    """Slew from `start` to where the plan (plus axis offsets) will be when the slew ends,
+    joining the plan at the later of its start and the slew's arrival."""
     vel = math.radians(tracking.slew_vel_deg_s)
     acc = math.radians(tracking.slew_acc_deg_s2)
     t0 = now_ns + int(lead_s * NS)
 
     def profiles_to(t_join):
         a, e = plan.mech(np.int64(t_join))
-        return {"az": MoveProfile(start["az"], float(a[0]), vel, acc), "el": MoveProfile(start["el"], float(e[0]), vel, acc)}
+        a0, e0 = float(a[0]) + offsets[0], float(e[0]) + offsets[1]
+        return {"az": MoveProfile(start["az"], a0, vel, acc), "el": MoveProfile(start["el"], e0, vel, acc)}
 
     t_join = max(plan.start_ns, t0)
     for _ in range(8):  # the target moves while we slew: iterate on the join time
@@ -108,59 +120,150 @@ def plan_slew(plan: Plan, start: dict[str, float], now_ns: int, tracking: Tracki
 
 
 class TrackAborted(RuntimeError):
-    pass
+    """Tracking ended because of a fault, a trip or an error; the drives were disabled."""
 
 
-def track(client: MountClient, plan: Plan, tracking: Tracking, disable_after: bool = True, stop_flag=None) -> dict:
-    """Runs a plan to its end. Returns statistics; raises TrackAborted on faults or trips."""
-    stop_flag = stop_flag or (lambda: False)
+class TrackStopped(RuntimeError):
+    """Tracking was stopped on request. reason: "stop" (drives disabled), "hold" (holding
+    position, enabled) or "retarget" (left as is for the next track to take over)."""
+
+    def __init__(self, reason: str):
+        super().__init__(f"stopped ({reason})")
+        self.reason = reason
+
+
+class TrackControl:
+    """Thread-safe handle on a running track: stop or retarget it, change axis offsets, and see
+    its phase (waiting, slewing, tracking, done)."""
+
+    def __init__(self, on_phase=None):
+        self._lock = threading.Lock()
+        self._stop: str | None = None
+        self._resend = False
+        self._d_az = 0.0
+        self._d_el = 0.0
+        self.phase = "idle"
+        self._on_phase = on_phase
+
+    def stop(self, reason: str = "stop") -> None:
+        if reason not in ("stop", "hold", "retarget"):
+            raise ValueError(reason)
+        with self._lock:
+            self._stop = reason
+
+    def stop_reason(self) -> str | None:
+        with self._lock:
+            return self._stop
+
+    def set_axis_offsets(self, d_az: float, d_el: float) -> None:
+        with self._lock:
+            self._d_az, self._d_el = d_az, d_el
+            self._resend = True
+
+    def request_resend(self) -> None:
+        """Re-send the buffered future points (e.g. a satellite correction changed)."""
+        with self._lock:
+            self._resend = True
+
+    def axis_offsets(self) -> tuple[float, float]:
+        with self._lock:
+            return self._d_az, self._d_el
+
+    def take_resend(self) -> bool:
+        with self._lock:
+            r, self._resend = self._resend, False
+            return r
+
+    def set_phase(self, phase: str) -> None:
+        self.phase = phase
+        if self._on_phase:
+            self._on_phase(phase)
+
+
+def track(
+    client: MountClient,
+    plan: Plan,
+    tracking: Tracking,
+    disable_after: bool = True,
+    stop_flag=None,
+    control: TrackControl | None = None,
+    wait_lead_s: float = 90.0,
+) -> dict:
+    """Runs a plan to its end: waits until shortly before it starts, enables, slews, streams.
+    Returns statistics. Raises TrackAborted (drives disabled) on faults, trips and errors, and
+    TrackStopped when stopped through `control` or `stop_flag` (the CLI's Ctrl-C)."""
+    control = control or TrackControl()
     step = int(NS / tracking.point_rate_hz)
-    for axis in AXES:
-        ok, msg = client.enable(axis)
-        if not ok:
-            raise TrackAborted(f"enable {axis} rejected: {msg}")
-    deadline = time.monotonic() + 5.0
-    while True:
-        tel = client.telemetry(fresh=True)
-        states = {a.axis: a.state for a in tel.axes}
-        if all(states.get(a) == mpb.DRIVE_STATE_OPERATION_ENABLED for a in AXES):
-            break
-        if time.monotonic() > deadline:
-            raise TrackAborted(f"drives did not enable: {states}")
 
-    start = {a.axis: a.cmd_position_rad for a in tel.axes if a.axis in AXES}
-    slew = plan_slew(plan, start, time.time_ns(), tracking)
-    if slew.t_join_ns >= plan.end_ns:
-        client.disable()
-        raise TrackAborted("cannot reach the target before the plan ends")
-    log.info(
-        "slew %.1f s, joining the plan %.1f s after its start",
-        (slew.t_join_ns - slew.t0_ns) / NS,
-        (slew.t_join_ns - plan.start_ns) / NS,
-    )
-    client.clear_trajectory()
-    client.send_points(slew.points(step))
+    def check_stop():
+        reason = control.stop_reason() or ("stop" if stop_flag and stop_flag() else None)
+        if reason:
+            raise TrackStopped(reason)
 
-    next_t = slew.t_join_ns + step
-    # max_cmd_plan_rad: how far mount-rt's command strays from the plan while its limiter is not
-    # intervening (i.e. interpolation and timing). limited_samples counts samples where it did,
-    # e.g. recovering from missed cycles. max_cmd_act_rad: how far the axes lag their command.
-    stats = {"limited_samples": 0, "max_cmd_act_rad": 0.0, "max_cmd_plan_rad": 0.0, "samples": 0}
     try:
+        # Wait until shortly before the plan starts (e.g. a satellite pass later tonight).
+        if plan.start_ns - time.time_ns() > wait_lead_s * NS:
+            control.set_phase("waiting")
+            while plan.start_ns - time.time_ns() > wait_lead_s * NS:
+                check_stop()
+                time.sleep(0.2)
+
+        for axis in AXES:
+            ok, msg = client.enable(axis)
+            if not ok:
+                raise TrackAborted(f"enable {axis} rejected: {msg}")
+        deadline = time.monotonic() + 5.0
         while True:
-            if stop_flag():
-                raise TrackAborted("interrupted")
+            check_stop()
+            tel = client.telemetry(fresh=True)
+            states = {a.axis: a.state for a in tel.axes}
+            if all(states.get(a) == mpb.DRIVE_STATE_OPERATION_ENABLED for a in AXES):
+                break
+            if time.monotonic() > deadline:
+                raise TrackAborted(f"drives did not enable: {states}")
+
+        start = {a.axis: a.cmd_position_rad for a in tel.axes if a.axis in AXES}
+        slew = plan_slew(plan, start, time.time_ns(), tracking, offsets=control.axis_offsets())
+        if slew.t_join_ns >= plan.end_ns:
+            raise TrackAborted("cannot reach the target before the plan ends")
+        log.info(
+            "slew %.1f s, joining the plan %.1f s after its start",
+            (slew.t_join_ns - slew.t0_ns) / NS,
+            (slew.t_join_ns - plan.start_ns) / NS,
+        )
+        control.set_phase("slewing")
+        client.clear_trajectory()
+        client.send_points(slew.points(step))
+
+        next_t = slew.t_join_ns + step
+        # max_cmd_plan_rad: how far mount-rt's command strays from the plan while its limiter is
+        # not intervening (interpolation and timing). limited_samples counts samples where it
+        # did, e.g. recovering from missed cycles. max_cmd_act_rad: how far the axes lag their
+        # command.
+        stats = {"limited_samples": 0, "max_cmd_act_rad": 0.0, "max_cmd_plan_rad": 0.0, "samples": 0}
+        offsets_changed_ns = 0
+        while True:
+            check_stop()
             now = time.time_ns()
+            if control.take_resend() and now > slew.t_join_ns:
+                # Replace buffered future points (mount-rt drops those at/after the first new one).
+                next_t = max(now + 300_000_000, slew.t_join_ns + step)
+                offsets_changed_ns = now
+            if control.phase == "slewing" and now >= slew.t_join_ns:
+                control.set_phase("tracking")
+            d_az, d_el = control.axis_offsets()
             horizon = min(now + int(tracking.lookahead_s * NS), plan.end_ns)
             if next_t <= horizon:
-                client.send_points(plan_points(plan, next_t, horizon, step))
+                client.send_points(plan_points(plan, next_t, horizon, step, d_az, d_el))
                 next_t = horizon + step
             tel = client.telemetry(fresh=True)
-            tracking_phase = slew.t_join_ns + NS < tel.t_ns < plan.end_ns - NS
+            tracking_phase = (
+                slew.t_join_ns + NS < tel.t_ns < plan.end_ns - NS and tel.t_ns > offsets_changed_ns + 2 * NS
+            )
             if tracking_phase:
                 # mount-rt's cmd_position is for t + its command lead (1 ms by default).
                 pa, pe = plan.mech(np.int64(tel.t_ns + 1_000_000))
-                planned = {"az": pa[0], "el": pe[0]}
+                planned = {"az": pa[0] + d_az, "el": pe[0] + d_el}
             if tel.tripped:
                 raise TrackAborted("following-error trip in mount-rt")
             for a in tel.axes:
@@ -178,9 +281,25 @@ def track(client: MountClient, plan: Plan, tracking: Tracking, disable_after: bo
             if now > plan.end_ns + NS // 2:
                 break
             time.sleep(0.1)
+    except TrackStopped as e:
+        if e.reason == "stop":
+            _safe(client.disable)
+        elif e.reason == "hold":
+            _safe(client.clear_trajectory)  # mount-rt decelerates and holds
+        control.set_phase("done")
+        raise
     except (TrackAborted, MountError, KeyboardInterrupt):
-        client.disable()
+        _safe(client.disable)
+        control.set_phase("done")
         raise
     if disable_after:
         client.disable()
+    control.set_phase("done")
     return stats
+
+
+def _safe(fn) -> None:
+    try:
+        fn()
+    except MountError as e:  # mount-rt gone: nothing more to do, the trajectory will run out
+        log.warning("%s", e)

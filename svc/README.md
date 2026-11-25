@@ -4,7 +4,7 @@ Python services that run on the Pi's non-real-time cores and talk over Zenoh.
 
 | Service | Responsibility | Status |
 | --- | --- | --- |
-| `mount-svc` | Targets (sidereal, SGP4, fixed), ERFA astrometry, pointing model, pass planner, trajectory streaming to `mount-rt` | v0: command line |
+| `mount-svc` | Targets (sidereal, SGP4, fixed), ERFA astrometry, pointing model, pass planner, trajectory streaming to `mount-rt` | v0: Zenoh service + command line |
 | `camera-svc` | ZWO and GigE capture, centroiding, plate solving (ASTAP), autofocus | planned |
 | `supervisor` | Safety (sun, weather, clock quality, heartbeats) and the night scheduler | planned |
 | `gui-gateway` | Serves the web GUI; REST + WebSocket bridge to Zenoh | planned |
@@ -32,6 +32,27 @@ svc/.venv/bin/mount-svc --system $SYS track-tle --tle iss.tle   # wait for the n
 svc/.venv/bin/mount-svc --system $SYS track-radec --ra 06:45:08.9 --dec -16:42:58 --minutes 10
 svc/.venv/bin/mount-svc --system $SYS goto --az 180 --el 45
 ```
+
+### As a service
+
+`mount-svc serve` keeps running and takes targets over Zenoh from the GUI, the scheduler or the
+camera loop (keys `svc/target`, `svc/passes`, `svc/status`; messages in
+`schemas/maxmount/v1/target.proto`). `mount-svc request ...` is a command-line client for it:
+
+```sh
+svc/.venv/bin/mount-svc --system $SYS serve &
+svc/.venv/bin/mount-svc --system $SYS request radec --ra 06:45:08.9 --dec -16:42:58
+svc/.venv/bin/mount-svc --system $SYS request offsets --az 30 --el -15      # arcsec, live
+svc/.venv/bin/mount-svc --system $SYS request tle --tle iss.tle             # waits for the pass
+svc/.venv/bin/mount-svc --system $SYS request status
+svc/.venv/bin/mount-svc --system $SYS request stop                          # --hold keeps enabled
+```
+
+The reply to a track or go-to request comes after planning: it carries the chosen plan, or the
+reason no plan fits (horizon, Sun, rates, cable wrap, clock). A new target takes over from the
+current one without disabling the drives. Offsets take effect within about 0.3 s, because the
+buffered future points are re-sent. The along-track and cross-track corrections apply to a
+satellite target; the axis offsets apply to any target (hand control, camera loop).
 
 Each track enables the axes, slews to where the target will be when the slew ends, then
 streams time-tagged points (20 Hz, 5 s ahead) that `mount-rt` interpolates at 1 kHz. Ctrl-C,

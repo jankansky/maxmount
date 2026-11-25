@@ -1,0 +1,123 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Target interface of mount-svc (GUI, scheduler, camera loop -> mount-svc).
+// Keys (under maxmount/<site>/) are listed in schemas/zenoh-keys.md.
+// Angles in degrees for human-facing fields, as named; times in ns since the Unix epoch (UTC).
+syntax = "proto3";
+
+package maxmount.v1;
+
+message RaDec {
+  double ra_deg = 1;            // ICRS, epoch J2000
+  double dec_deg = 2;
+  double pm_ra_mas_yr = 3;      // proper motion in RA * cos(dec), mas/yr
+  double pm_dec_mas_yr = 4;
+  double parallax_mas = 5;
+  double radial_velocity_km_s = 6;
+  string name = 7;
+  double duration_s = 8;        // 0 = until the target sets or reaches a limit
+}
+
+message Tle {
+  string name = 1;
+  string line1 = 2;
+  string line2 = 3;
+  uint32 pass_index = 4;        // 0 = the next pass (or the current one, if it is up)
+  string mode = 5;              // "", "normal", "flipped" or "over_the_top"
+}
+
+message AltAz {
+  double az_deg = 1;
+  double el_deg = 2;
+  double hold_s = 3;            // 0 = hold until the next command
+  string name = 4;
+}
+
+// Live corrections. Satellite corrections apply to the current satellite target; the axis
+// offsets apply to every target (hand control, camera loop).
+message Offsets {
+  double time_offset_s = 1;     // along-track: predict the satellite at t + time_offset_s
+  double cross_track_deg = 2;   // perpendicular to the apparent motion, + = left
+  double az_arcsec = 3;         // added to the commanded azimuth axis
+  double el_arcsec = 4;         // added to the commanded elevation axis
+}
+
+message Stop {
+  bool keep_enabled = 1;        // hold position instead of disabling the drives
+}
+
+message TargetCommand {
+  oneof command {
+    RaDec track_radec = 1;
+    Tle track_tle = 2;
+    AltAz goto_altaz = 3;
+    Offsets set_offsets = 4;
+    Stop stop = 5;
+  }
+  bool allow_clock_error = 10;  // satellites: track even if chrony's error bound is too large
+}
+
+message PlanSummary {
+  string mode = 1;              // normal | flipped | over_the_top
+  bool feasible = 2;
+  repeated string problems = 3;
+  int64 start_ns = 4;
+  int64 end_ns = 5;
+  double peak_az_deg_s = 6;
+  double peak_el_deg_s = 7;
+  double max_error_deg = 8;     // over-the-top pointing error
+}
+
+message TargetReply {
+  bool accepted = 1;
+  string message = 2;
+  PlanSummary plan = 3;         // the plan that will run (track/goto commands)
+}
+
+message PassesRequest {
+  Tle tle = 1;
+  double hours = 2;             // search window (default 24)
+  int64 start_ns = 3;           // 0 = now
+}
+
+message PassInfo {
+  int64 rise_ns = 1;
+  int64 culmination_ns = 2;
+  int64 set_ns = 3;
+  double max_el_deg = 4;
+  double culmination_az_deg = 5;
+  PlanSummary chosen = 6;       // empty mode if no plan fits
+  repeated PlanSummary plans = 7;
+}
+
+message PassesReply {
+  bool ok = 1;
+  string message = 2;
+  repeated PassInfo passes = 3;
+}
+
+enum ServiceState {
+  SERVICE_STATE_UNKNOWN = 0;
+  SERVICE_STATE_IDLE = 1;        // no target; drives disabled or holding
+  SERVICE_STATE_WAITING = 2;     // planned, waiting for a pass to start
+  SERVICE_STATE_SLEWING = 3;
+  SERVICE_STATE_TRACKING = 4;
+  SERVICE_STATE_ERROR = 5;       // last track aborted; see message
+}
+
+message ServiceStatus {
+  int64 t_ns = 1;
+  ServiceState state = 2;
+  string target_name = 3;
+  string target_kind = 4;       // radec | tle | altaz
+  PlanSummary plan = 5;
+  Offsets offsets = 6;
+  string message = 7;           // last event or error
+  double target_az_deg = 8;     // observed position of the target now (if any)
+  double target_el_deg = 9;
+  double clock_error_us = 10;   // chrony's error bound; < 0 = unknown
+  string clock_source = 11;
+  string site_source = 12;      // e.g. "gpsd, 10 fixes" or "system file"
+  double site_lat_deg = 13;
+  double site_lon_deg = 14;
+  double site_height_m = 15;
+}

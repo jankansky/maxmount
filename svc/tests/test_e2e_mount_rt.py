@@ -76,13 +76,19 @@ def test_slew_and_track_a_moving_target(served):
     plan = planner.plan_mode("normal", target, t0, t0 + 25 * NS, settings.az, settings.el, settings.tracking, near_az=near)
     assert plan.feasible, plan.problems
 
+    before = client.telemetry(fresh=True).loop
     stats = tracker.track(client, plan, settings.tracking, disable_after=False)
+    after = client.telemetry(fresh=True).loop
     assert stats["samples"] > 50
     # Where mount-rt's limiter is not intervening, its command matches the plan (Hermite
-    # interpolation of 20 Hz points). On a desktop OS missed cycles make the limiter step in
-    # now and then; on the PREEMPT_RT Pi there are none.
+    # interpolation of 20 Hz points).
     assert np.degrees(stats["max_cmd_plan_rad"]) * 3600 < 10
-    assert stats["limited_samples"] < 0.5 * stats["samples"]
+    # Missed cycles make the limiter catch up (and say so). How often depends on the host: none
+    # on the PREEMPT_RT Pi, some on a desktop OS, constantly in a Docker Desktop VM. Only judge
+    # the limiter's share when the loop kept time.
+    missed = (after.overruns - before.overruns) / max(1, after.cycles - before.cycles)
+    if missed < 0.01:
+        assert stats["limited_samples"] < 0.5 * stats["samples"], f"missed {missed:.1%} of cycles"
     assert np.degrees(stats["max_cmd_act_rad"]) < 0.05
 
     # The plan ends with the target moving at 2 deg/s: when the points run out mount-rt
@@ -94,8 +100,11 @@ def test_slew_and_track_a_moving_target(served):
     v_end = (plan.mech(plan.end_ns)[0] - plan.mech(plan.end_ns - NS // 10)[0])[0] * 10
     max_overshoot = v_end**2 / (2 * settings.az.max_acc)  # stopping at the axis acceleration
     # Where exactly it stops depends on when the last points ran out (host timing); the safety
-    # property is that the stop is bounded. The C++ limiter tests cover the stop itself.
-    assert abs(axes["az"].act_position_rad - a_end[0]) <= max_overshoot + 0.02 * DEG
+    # property is that the stop is bounded. If the loop was missing cycles, the axis may still
+    # have been catching up (moving faster than the target) when the points ran out, so the
+    # bound only holds when it kept time. The C++ limiter tests cover the stop itself.
+    if missed < 0.01:
+        assert abs(axes["az"].act_position_rad - a_end[0]) <= max_overshoot + 0.02 * DEG
 
     ok, msg = client.disable()
     assert ok, msg

@@ -1,0 +1,403 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""mount-svc as a long-running Zenoh service (`mount-svc serve`).
+
+Keys under maxmount/<site>/ (schemas/zenoh-keys.md, messages in schemas/maxmount/v1/target.proto):
+
+    svc/target   query   TargetCommand -> TargetReply   track, go to, offsets, stop
+    svc/passes   query   PassesRequest -> PassesReply   upcoming passes of a TLE with plans
+    svc/status   pub     ServiceStatus, 2 Hz
+
+Threads: Zenoh callbacks hand target commands to one request thread, which plans them and
+owns every action on mount-rt; each track runs in a worker thread controlled through a
+TrackControl. A new target retargets without disabling the drives. The reply to a track or
+goto command is sent after planning, so it carries the chosen plan or the reason it was refused.
+"""
+from __future__ import annotations
+
+import logging
+import math
+import queue
+import threading
+import time
+from concurrent.futures import Future
+
+import numpy as np
+
+from . import clock, planner, tracker
+from .config import SystemSettings
+from .mount import MountClient, MountError
+from .planner import NS, Plan
+from .pointing import PointingModel
+from .proto import mpb
+from .targets import FixedTarget, SatelliteTarget, SgpError, SiderealTarget
+
+log = logging.getLogger(__name__)
+DEG = math.pi / 180
+ARCSEC = DEG / 3600
+MAS = ARCSEC / 1000
+
+STATE = {
+    "idle": mpb.SERVICE_STATE_IDLE,
+    "waiting": mpb.SERVICE_STATE_WAITING,
+    "slewing": mpb.SERVICE_STATE_SLEWING,
+    "tracking": mpb.SERVICE_STATE_TRACKING,
+    "error": mpb.SERVICE_STATE_ERROR,
+}
+
+
+def plan_summary(p: Plan | None) -> mpb.PlanSummary:
+    s = mpb.PlanSummary()
+    if p is None:
+        return s
+    s.mode = p.mode
+    s.feasible = p.feasible
+    s.problems.extend(p.problems)
+    s.start_ns = p.start_ns
+    s.end_ns = p.end_ns
+    s.peak_az_deg_s = float(np.degrees(p.peak_vel[0]))
+    s.peak_el_deg_s = float(np.degrees(p.peak_vel[1]))
+    s.max_error_deg = float(np.degrees(p.max_error))
+    return s
+
+
+def _rejection(plans: list[Plan]) -> str:
+    return "no feasible plan: " + "; ".join(f"{p.mode}: {', '.join(p.problems)}" for p in plans)
+
+
+class Rejected(Exception):
+    pass
+
+
+class MountService:
+    def __init__(self, settings: SystemSettings, client: MountClient, model: PointingModel | None = None):
+        if settings.site is None:
+            raise ValueError("mount-svc serve needs a site (system file `site:` section)")
+        self.settings = settings
+        self.client = client
+        self.model = model or PointingModel.load(settings.pointing_file)
+        self._requests: queue.Queue = queue.Queue()
+        self._lock = threading.Lock()
+        self._closing = threading.Event()
+        self._threads: list[threading.Thread] = []
+        self._decls = []
+
+        # Guarded by _lock.
+        self._gen = 0  # increments per track; a worker only reports for its own generation
+        self._state = "idle"
+        self._message = "started"
+        self._target = None
+        self._target_kind = ""
+        self._plan: Plan | None = None
+        self._offsets = mpb.Offsets()
+        self._control: tracker.TrackControl | None = None
+        self._worker: threading.Thread | None = None
+        self._clock: clock.ClockStatus | None = None
+        self._clock_checked = 0.0
+
+    # -- lifecycle ---------------------------------------------------------------------------
+    def start(self) -> None:
+        s = self.client.session
+        self._status_pub = s.declare_publisher(self.client.key("svc/status"))
+        self._decls += [
+            s.declare_queryable(self.client.key("svc/target"), self._on_target_query),
+            s.declare_queryable(self.client.key("svc/passes"), self._on_passes_query),
+            self._status_pub,
+        ]
+        for fn in (self._request_loop, self._status_loop):
+            t = threading.Thread(target=fn, daemon=True, name=fn.__name__)
+            t.start()
+            self._threads.append(t)
+        log.info("mount-svc serving on %s", self.client.key("svc/*"))
+
+    def close(self, disable: bool = True) -> None:
+        self._closing.set()
+        with self._lock:
+            control, worker = self._control, self._worker
+        if control:
+            control.stop("stop" if disable else "hold")
+        if worker:
+            worker.join(timeout=10)
+        for d in self._decls:
+            try:
+                d.undeclare()
+            except Exception:  # noqa: BLE001
+                pass
+        for t in self._threads:
+            t.join(timeout=2)
+
+    # -- Zenoh callbacks ---------------------------------------------------------------------
+    def _on_target_query(self, query) -> None:
+        reply = mpb.TargetReply()
+        try:
+            cmd = mpb.TargetCommand()
+            cmd.ParseFromString(query.payload.to_bytes() if query.payload is not None else b"")
+            fut: Future = Future()
+            self._requests.put((cmd, fut))
+            reply = fut.result(timeout=20)
+        except Exception as e:  # noqa: BLE001 - always answer the query
+            reply.accepted = False
+            reply.message = f"{type(e).__name__}: {e}"
+        query.reply(self.client.key("svc/target"), reply.SerializeToString())
+
+    def _on_passes_query(self, query) -> None:
+        try:
+            req = mpb.PassesRequest()
+            req.ParseFromString(query.payload.to_bytes() if query.payload is not None else b"")
+            reply = self.passes(req)
+        except Exception as e:  # noqa: BLE001
+            reply = mpb.PassesReply(ok=False, message=f"{type(e).__name__}: {e}")
+        query.reply(self.client.key("svc/passes"), reply.SerializeToString())
+
+    # -- request thread ----------------------------------------------------------------------
+    def _request_loop(self) -> None:
+        while not self._closing.is_set():
+            try:
+                cmd, fut = self._requests.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                fut.set_result(self.handle(cmd))
+            except Rejected as e:
+                fut.set_result(mpb.TargetReply(accepted=False, message=str(e)))
+            except Exception as e:  # noqa: BLE001
+                log.exception("request failed")
+                fut.set_result(mpb.TargetReply(accepted=False, message=f"{type(e).__name__}: {e}"))
+
+    def handle(self, cmd) -> mpb.TargetReply:
+        which = cmd.WhichOneof("command")
+        if which is None:
+            raise Rejected("empty TargetCommand")
+        if which == "set_offsets":
+            return self._set_offsets(cmd.set_offsets)
+        if which == "stop":
+            return self._stop(cmd.stop.keep_enabled)
+        target, kind, plan, disable_after = getattr(self, f"_plan_{which}")(getattr(cmd, which), cmd.allow_clock_error)
+        self._start_track(target, kind, plan, disable_after)
+        return mpb.TargetReply(accepted=True, message=f"{plan.mode} plan for {target.name}", plan=plan_summary(plan))
+
+    def _near_az(self) -> float | None:
+        try:
+            return self.client.axis("az").cmd_position_rad
+        except MountError:
+            return None
+
+    def _plan_track_radec(self, r, _allow_clock):
+        site, tr = self.settings.site, self.settings.tracking
+        dec = r.dec_deg * DEG
+        target = SiderealTarget(
+            site,
+            r.ra_deg * DEG,
+            dec,
+            pmra=(r.pm_ra_mas_yr * MAS) / max(math.cos(dec), 1e-9),
+            pmdec=r.pm_dec_mas_yr * MAS,
+            parallax_as=r.parallax_mas / 1000.0,
+            rv_km_s=r.radial_velocity_km_s,
+            name=r.name or f"RA {r.ra_deg:.4f} Dec {r.dec_deg:+.4f}",
+        )
+        t0 = time.time_ns() + 2 * NS
+        up = planner.find_passes(target, t0, t0 + 24 * 3600 * NS, tr.horizon_min_el_deg * DEG, step_s=60)
+        if not up or up[0].rise_ns > t0 + 60 * NS:
+            raise Rejected(f"{target.name} is below the {tr.horizon_min_el_deg:.0f} deg horizon")
+        end = up[0].set_ns - 30 * NS
+        if r.duration_s > 0:
+            end = min(end, t0 + int(r.duration_s * NS))
+        end = min(end, t0 + 8 * 3600 * NS)
+        best, plans = self._make_plan(target, t0, end, ("normal", "flipped"), step_s=1.0)
+        if best is None:
+            raise Rejected(_rejection(plans))
+        return target, "radec", best, True
+
+    def _plan_track_tle(self, t, allow_clock_error: bool):
+        site, tr = self.settings.site, self.settings.tracking
+        self._clock_gate(allow_clock_error)
+        try:
+            target = SatelliteTarget(
+                site,
+                t.line1,
+                t.line2,
+                name=t.name or f"NORAD {t.line1[2:7].strip()}",
+                time_offset_s=self._offsets.time_offset_s,
+                cross_track_rad=self._offsets.cross_track_deg * DEG,
+            )
+            now = time.time_ns()
+            passes = planner.find_passes(target, now, now + 24 * 3600 * NS, tr.horizon_min_el_deg * DEG)
+        except (ValueError, SgpError) as e:
+            raise Rejected(f"bad TLE: {e}") from None
+        if len(passes) <= t.pass_index:
+            raise Rejected(f"{target.name}: no pass #{t.pass_index} in the next 24 h")
+        p = passes[t.pass_index]
+        if t.mode and t.mode not in ("normal", "flipped", "over_the_top"):
+            raise Rejected(f"unknown mode '{t.mode}'")
+        modes = (t.mode,) if t.mode else ("normal", "flipped", "over_the_top")
+        best, plans = self._make_plan(target, max(p.rise_ns, now + 2 * NS), p.set_ns, modes)
+        if best is None:
+            raise Rejected(_rejection(plans))
+        return target, "tle", best, True
+
+    def _plan_goto_altaz(self, a, _allow_clock):
+        target = FixedTarget(a.az_deg * DEG, a.el_deg * DEG, name=a.name or f"az {a.az_deg:.2f} el {a.el_deg:.2f}")
+        t0 = time.time_ns() + 2 * NS
+        hold = a.hold_s if a.hold_s > 0 else 12 * 3600
+        best, plans = self._make_plan(target, t0, t0 + int(hold * NS), ("normal",), step_s=10.0)
+        if best is None:
+            raise Rejected(_rejection(plans))
+        return target, "altaz", best, a.hold_s > 0
+
+    def _make_plan(self, target, t0, t1, modes, step_s=0.1):
+        s = self.settings
+        plans = [
+            planner.plan_mode(m, target, t0, t1, s.az, s.el, s.tracking, s.site, self.model, self._near_az(), step_s)
+            for m in modes
+        ]
+        return planner.choose_plan(plans), plans
+
+    def _clock_gate(self, allow: bool) -> None:
+        if self.settings.backend == "sim" or allow:
+            return
+        st = clock.chrony_status()
+        if st is None:
+            raise Rejected("clock error unknown (chrony not available); set allow_clock_error to override")
+        if st.error_bound_us > self.settings.max_clock_error_us:
+            raise Rejected(
+                f"clock error bound {st.error_bound_us:.0f} us > {self.settings.max_clock_error_us:.0f} us; "
+                "set allow_clock_error to override"
+            )
+
+    def _start_track(self, target, kind, plan, disable_after) -> None:
+        with self._lock:
+            old_control, old_worker = self._control, self._worker
+        if old_control:
+            old_control.stop("retarget")  # no disable: the new track takes over the drives
+        if old_worker:
+            old_worker.join(timeout=10)
+        d_az, d_el = self._offsets.az_arcsec * ARCSEC, self._offsets.el_arcsec * ARCSEC
+        with self._lock:
+            self._gen += 1
+            gen = self._gen
+            control = tracker.TrackControl(on_phase=lambda phase: self._on_phase(gen, phase))
+            control.set_axis_offsets(d_az, d_el)
+            self._target, self._target_kind, self._plan = target, kind, plan
+            self._state, self._message = "slewing", f"planned {plan.mode} for {target.name}"
+            self._control = control
+            self._worker = threading.Thread(
+                target=self._run_worker, args=(gen, plan, control, disable_after), daemon=True, name=f"track-{gen}"
+            )
+            self._worker.start()
+
+    def _on_phase(self, gen: int, phase: str) -> None:
+        with self._lock:
+            if gen == self._gen and phase in STATE:
+                self._state = phase
+
+    def _run_worker(self, gen, plan, control, disable_after) -> None:
+        final, message = "idle", "finished"
+        try:
+            stats = tracker.track(self.client, plan, self.settings.tracking, disable_after, control=control)
+            message = f"finished; max |cmd - act| {np.degrees(stats['max_cmd_act_rad']) * 3600:.1f} arcsec"
+        except tracker.TrackStopped as e:
+            message = f"stopped ({e.reason})"
+            if e.reason == "retarget":
+                return  # the next track reports from here on
+        except (tracker.TrackAborted, MountError) as e:
+            final, message = "error", f"aborted: {e}"
+        except Exception as e:  # noqa: BLE001
+            log.exception("track failed")
+            final, message = "error", f"{type(e).__name__}: {e}"
+        with self._lock:
+            if gen == self._gen:
+                self._state, self._message = final, message
+                self._control = None
+
+    def _set_offsets(self, o) -> mpb.TargetReply:
+        with self._lock:
+            self._offsets.CopyFrom(o)
+            target, control = self._target, self._control
+        if isinstance(target, SatelliteTarget):
+            target.time_offset_s = o.time_offset_s
+            target.cross_track_rad = o.cross_track_deg * DEG
+        if control:
+            control.set_axis_offsets(o.az_arcsec * ARCSEC, o.el_arcsec * ARCSEC)  # also re-sends
+        return mpb.TargetReply(accepted=True, message="offsets set")
+
+    def _stop(self, keep_enabled: bool) -> mpb.TargetReply:
+        with self._lock:
+            control, worker = self._control, self._worker
+        if control:
+            control.stop("hold" if keep_enabled else "stop")
+            if worker:
+                worker.join(timeout=10)
+        elif not keep_enabled:
+            try:
+                self.client.disable()
+            except MountError as e:
+                raise Rejected(str(e)) from None
+        with self._lock:
+            self._state, self._message = "idle", "stopped (holding)" if keep_enabled else "stopped"
+            self._target, self._plan, self._control = None, None, None
+        return mpb.TargetReply(accepted=True, message="stopped")
+
+    # -- passes ------------------------------------------------------------------------------
+    def passes(self, req) -> mpb.PassesReply:
+        s = self.settings
+        try:
+            target = SatelliteTarget(s.site, req.tle.line1, req.tle.line2, name=req.tle.name or "satellite")
+        except ValueError as e:
+            return mpb.PassesReply(ok=False, message=f"bad TLE: {e}")
+        t0 = req.start_ns or time.time_ns()
+        hours = req.hours if req.hours > 0 else 24.0
+        reply = mpb.PassesReply(ok=True)
+        try:
+            found = planner.find_passes(target, t0, t0 + int(hours * 3600 * NS), s.tracking.horizon_min_el_deg * DEG)
+        except SgpError as e:
+            return mpb.PassesReply(ok=False, message=str(e))
+        for p in found:
+            best, plans = planner.plan_all(target, p.rise_ns, p.set_ns, s.az, s.el, s.tracking, s.site, self.model)
+            info = reply.passes.add()
+            info.rise_ns, info.culmination_ns, info.set_ns = p.rise_ns, p.culmination_ns, p.set_ns
+            info.max_el_deg = float(np.degrees(p.max_el))
+            info.culmination_az_deg = float(np.degrees(p.culmination_az))
+            if best is not None:
+                info.chosen.CopyFrom(plan_summary(best))
+            for pl in plans:
+                info.plans.add().CopyFrom(plan_summary(pl))
+        reply.message = f"{len(found)} pass(es) in {hours:g} h"
+        return reply
+
+    # -- status ------------------------------------------------------------------------------
+    def status(self) -> mpb.ServiceStatus:
+        now = time.time_ns()
+        if time.monotonic() - self._clock_checked > 10:
+            self._clock_checked = time.monotonic()
+            self._clock = clock.chrony_status()
+        site = self.settings.site
+        with self._lock:
+            st = mpb.ServiceStatus(
+                t_ns=now,
+                state=STATE[self._state],
+                target_name=getattr(self._target, "name", ""),
+                target_kind=self._target_kind,
+                message=self._message,
+                clock_error_us=self._clock.error_bound_us if self._clock else -1.0,
+                clock_source=self._clock.source if self._clock else "",
+                site_source=site.position_source,
+                site_lat_deg=site.latitude_deg,
+                site_lon_deg=site.longitude_deg,
+                site_height_m=site.height_m,
+            )
+            st.offsets.CopyFrom(self._offsets)
+            st.plan.CopyFrom(plan_summary(self._plan))
+            target = self._target
+        if target is not None:
+            try:
+                az, el = target.observed(np.int64(now))
+                st.target_az_deg, st.target_el_deg = float(np.degrees(az)), float(np.degrees(el))
+            except Exception:  # noqa: BLE001 - status must not fail
+                pass
+        return st
+
+    def _status_loop(self) -> None:
+        while not self._closing.wait(0.5):
+            try:
+                self._status_pub.put(self.status().SerializeToString())
+            except Exception:  # noqa: BLE001
+                log.exception("status publish failed")

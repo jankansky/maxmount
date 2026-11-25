@@ -2,8 +2,9 @@
 
 All keys live under `maxmount/<site>/`, where `<site>` comes from the `zenoh.site` entry of
 the system file. Payloads are Protobuf messages from [`maxmount/v1`](maxmount/v1/) unless
-noted. The `mount/*` keys are implemented by `mount-rt` (`rt/src/bridge`); the rest are
-planned.
+noted. The `mount/*` keys are implemented by `mount-rt` (`rt/src/bridge`) and the `svc/*` keys
+by `mount-svc serve` (`svc/src/maxmount_svc/service.py`, messages in `target.proto`); the rest
+are planned.
 
 | Key | Kind | Payload | Producer → consumer |
 | --- | --- | --- | --- |
@@ -11,7 +12,9 @@ planned.
 | `mount/cmd` | queryable | `MountCommand` → `CommandReply` | GUI, scheduler → mount-rt |
 | `mount/telemetry` | pub (50 Hz) | `MountTelemetry` | mount-rt → all |
 | `mount/telemetry/raw` | pub (every cycle, in batches of 50) | `MountTelemetryBatch` | mount-rt → loggers, camera-svc |
-| `mount/target` | queryable / pub | target and tracking state (TBD) | mount-svc |
+| `svc/target` | queryable | `TargetCommand` → `TargetReply` | GUI, scheduler, camera loop → mount-svc |
+| `svc/passes` | queryable | `PassesRequest` → `PassesReply` | GUI, scheduler → mount-svc |
+| `svc/status` | pub (2 Hz) | `ServiceStatus` | mount-svc → GUI, scheduler |
 | `camera/<id>/preview` | pub | JPEG/H.264 frame (TBD) | camera-svc → GUI |
 | `camera/<id>/centroid` | pub | measured offset + mid-exposure time (TBD) | camera-svc → mount-svc |
 | `time/status` | pub | clock source, offset, error estimate (TBD) | time monitor → mount-svc, GUI |

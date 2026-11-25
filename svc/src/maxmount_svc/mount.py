@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 
@@ -34,11 +35,18 @@ class MountClient:
     def key(self, suffix: str) -> str:
         return self.prefix + suffix
 
+    @property
+    def session(self) -> zenoh.Session:
+        return self._session
+
     def close(self) -> None:
-        try:
-            self._sub.undeclare()
-        finally:
-            self._session.close()
+        # Shutting down must not fail: by now the drives are disabled or the trajectory will
+        # run out. Zenoh can time out closing a session whose peers have already gone.
+        for fn in (self._sub.undeclare, self._session.close):
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger(__name__).debug("zenoh close: %s", e)
 
     def __enter__(self):
         return self
@@ -77,15 +85,27 @@ class MountClient:
         raise MountError(f"mount-rt has no axis '{name}'")
 
     # -- commands ----------------------------------------------------------------------------
+    def query(self, suffix: str, payload: bytes, timeout: float = 3.0, discovery_s: float = 5.0) -> bytes | None:
+        """First reply payload of a Zenoh query, or None. A query that finds no queryable at all
+        returns at once; right after start-up that can just mean routes are still being
+        discovered, so it is retried for up to discovery_s. A reply, even a rejection, is
+        never retried."""
+        deadline = time.monotonic() + discovery_s
+        while True:
+            for reply in self._session.get(self.key(suffix), payload=payload, timeout=timeout):
+                if reply.ok is not None:
+                    return reply.ok.payload.to_bytes()
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.2)
+
     def command(self, cmd: mpb.MountCommand, timeout: float = 3.0) -> tuple[bool, str]:
-        replies = self._session.get(self.key("mount/cmd"), payload=cmd.SerializeToString(), timeout=timeout)
-        for reply in replies:
-            if reply.ok is None:
-                continue
-            r = mpb.CommandReply()
-            r.ParseFromString(reply.ok.payload.to_bytes())
-            return r.accepted, r.message
-        raise MountError("no reply on mount/cmd: is mount-rt running?")
+        out = self.query("mount/cmd", cmd.SerializeToString(), timeout)
+        if out is None:
+            raise MountError("no reply on mount/cmd: is mount-rt running?")
+        r = mpb.CommandReply()
+        r.ParseFromString(out)
+        return r.accepted, r.message
 
     def _simple(self, field: str, axis: str = "") -> tuple[bool, str]:
         m = mpb.MountCommand()
