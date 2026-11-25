@@ -420,7 +420,7 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 - [ ] Choose the field rotator: third EtherCAT axis or commercial USB rotator.
 - [ ] Choose the ZWO camera for high-rate ROI capture and check its frame rate at the planned ROI and bit depth; size the recording SSD.
 - [ ] Measure the chosen ZWO camera's photon transfer curve (read noise, e⁻/ADU, full well against gain, HCG switch point) for automatic exposure and gain (the characterisation feature does this).
-- [ ] Choose a light-tight cover for unattended darks: a motorised cap or a flip-flat panel (which also gives flats), with an ASCOM/INDI driver.
+- [ ] Light-tight cover: near term, calibration frames are collected with manual steps (the GUI prompts to cap or uncap and checks darks for light leaks); long term, add a motorised cap and a flat panel (or a flip-flat that does both) with ASCOM/INDI drivers for unattended collection.
 - [ ] Confirm the iPOS accepts the ADRT sin/cos signal directly; record the encoder line count.
 - [ ] Check REE2000 max output frequency and drive encoder input bandwidth against worst-case elevation rate.
 - [ ] Measure azimuth cable-wrap travel allowed by the through-axis cables.
