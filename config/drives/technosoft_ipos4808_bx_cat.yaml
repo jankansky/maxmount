@@ -8,16 +8,19 @@ vendor: Technosoft
 model: iPOS4808 BX-CAT
 profile: cia402
 
-identity:
-  vendor_id: null      # TODO: from ESI file or SOEM slaveinfo
-  product_code: null   # TODO
+identity:              # read with SOEM slaveinfo from "iPOS4808 BX-CAT v10", 2026-11-25
+  vendor_id: 0x000001A3    # Technosoft
+  product_code: 0x019F418D
 
 modes: [csp]           # TODO: confirm firmware supports mode 8 (CSP)
 
 sync:
-  distributed_clocks: true
+  distributed_clocks: true   # confirmed: slaveinfo reports "Has DC: 1"
 
 # The mapping below is written to the drive at PRE-OP -> SAFE-OP (0x1C12/0x1C13 assignment).
+# Factory default seen on the reference drive (fw v10):
+#   rx: 6040 controlword, 607A target position
+#   tx: 6041 statusword, 6064 position, 6077 torque, 60F4 following error, 60FD digital inputs
 pdo_mapping:
   configure: true
   rx_index: 0x1600

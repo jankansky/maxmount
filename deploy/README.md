@@ -77,6 +77,22 @@ of allocating a large array for every camera frame. glibc serves allocations abo
 | USB-Ethernet | GigE widefield camera | Static IP on its own subnet, jumbo frames if supported |
 | `wlan0` | Laptop / operator | Access point in the field, client mode at a fixed site |
 
+Take the EtherCAT port away from NetworkManager and bring it up at boot without an IP
+address. NetworkManager would otherwise keep sending DHCP requests out of it. Once it is
+unmanaged, nothing raises the link, and SOEM then reports "no slaves found":
+
+```sh
+printf '[keyfile]\nunmanaged-devices=interface-name:eth0\n' | sudo tee /etc/NetworkManager/conf.d/99-ethercat.conf
+sudo systemctl reload NetworkManager
+sudo cp deploy/pi/ethercat-link@.service /etc/systemd/system/
+sudo systemctl enable --now ethercat-link@eth0
+ip link show eth0        # want <...,UP,LOWER_UP> once a drive is connected
+```
+
+To inspect the drives on the bus, build SOEM's `slaveinfo` tool with
+`cmake -S . -B build -DSOEM_BUILD_SAMPLES=ON && cmake --build build --target slaveinfo`, then
+run `sudo build/_deps/soem-build/samples/slaveinfo/slaveinfo eth0 -map`.
+
 Raise socket buffers for GigE Vision: `net.core.rmem_max = 33554432`.
 
 ## 3. Time (GNSS + PPS)

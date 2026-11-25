@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Brings an EtherCAT interface up at boot without giving it an IP address. NetworkManager is
+# told to leave the interface alone (conf.d/99-ethercat.conf), so nothing else raises it.
+#   sudo cp deploy/pi/ethercat-link@.service /etc/systemd/system/
+#   sudo systemctl enable --now ethercat-link@eth0
+[Unit]
+Description=EtherCAT link up on %i
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip link set %i up
+ExecStop=/usr/sbin/ip link set %i down
+
+[Install]
+WantedBy=multi-user.target

@@ -11,7 +11,9 @@
 #include <array>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 extern "C" {
 #include "soem/soem.h"
@@ -21,6 +23,33 @@ namespace maxmount {
 
 namespace {
 constexpr std::size_t kIoMapSize = 4096;
+
+// Reads a one-line sysfs attribute; empty if unavailable.
+std::string read_sysfs(const std::string& path) {
+    std::string out;
+    if (std::FILE* f = std::fopen(path.c_str(), "r")) {
+        char buf[64];
+        if (std::fgets(buf, sizeof(buf), f)) out = buf;
+        std::fclose(f);
+    }
+    while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+    return out;
+}
+
+// Empty if the interface is up with a carrier; otherwise a description of what is wrong.
+std::string check_link(const std::string& ifname) {
+    const std::string base = "/sys/class/net/" + ifname + "/";
+    const std::string flags = read_sysfs(base + "flags");
+    if (flags.empty()) return "network interface " + ifname + " does not exist";
+    if ((std::strtoul(flags.c_str(), nullptr, 16) & 0x1) == 0) {  // IFF_UP
+        return "network interface " + ifname + " is down; bring it up with: sudo ip link set " +
+               ifname + " up";
+    }
+    if (read_sysfs(base + "carrier") != "1") {
+        return "no link on " + ifname + ": check the cable to the first drive's EtherCAT IN port";
+    }
+    return {};
+}
 
 std::string hex32(std::uint32_t v) {
     char buf[16];
@@ -134,6 +163,14 @@ struct SoemFieldbus::Impl {
                 error = "drive " + std::to_string(i) + ": descriptor maps no process data";
                 return false;
             }
+        }
+
+        // SOEM opens a raw socket on a down interface without complaint and then finds no
+        // slaves, so check the link first. An interface excluded from NetworkManager is not
+        // brought up at boot (see deploy/README.md).
+        if (const std::string e = check_link(cfg.interface); !e.empty()) {
+            error = e;
+            return false;
         }
 
         std::memset(&ctx, 0, sizeof(ctx));  // large C struct: avoid a stack temporary
