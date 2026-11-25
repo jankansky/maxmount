@@ -118,10 +118,19 @@ using the height above the WGS84 ellipsoid. It caches the result in `~/.cache/ma
 last position is used when there is no fix.
 
 **GPS time offset.** Over USB, gpsd labels each second when the message arrives, so GPS time
-lags by a roughly fixed amount. With a fix and the network servers settled (`chronyc sources`
-shows `*` on a server), read the GPS row's offset from `chronyc sourcestats`. Put it into the
-`offset` of the `refclock` line, sign included, and restart chrony; the GPS row's offset should
-then be near zero. USB time stays at the millisecond level, so satellite passes still need
+lags by a roughly fixed amount. To measure it:
+
+1. Add `noselect` to the `refclock` line and restart chrony, so the GPS cannot pull the clock
+   toward itself while it is being measured.
+2. With a fix, wait about 10 minutes for the network servers to settle (`chronyc sources` shows
+   `*` on a server).
+3. Read the GPS row's `Offset` in `chronyc sourcestats`. A positive value means the GPS reads
+   late. Add it to the line's `offset`, remove `noselect`, and restart chrony. The GPS row should
+   then read near zero.
+
+On the reference Pi (u-blox M8, firmware SPG 3.01, over USB) the lag measured 36.6 ms with
+0.24 ms scatter, so its line reads `offset 0.037`. The calibration is only as good as the network
+time it is measured against, a few ms over Wi-Fi. USB time stays at the millisecond level, so satellite passes still need
 `--allow-clock-error` until a PPS receiver is wired (below).
 
 ### Later: GNSS with PPS on a GPIO
