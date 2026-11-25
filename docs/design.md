@@ -157,6 +157,46 @@ perpendicular, nudge) only make sense next to the images, so `camera-svc` provid
 - **Manual and automatic correction share one path.** In Auto the camera loop drives the
   offsets and the buttons add to them; in Manual only the buttons do.
 
+### Automatic exposure and gain (narrow field)
+
+The controller picks exposure first, then gain, because they answer different questions:
+
+1. **Exposure freezes the atmosphere and the motion.** Each frame must be shorter than the
+   atmospheric coherence time τ₀ (typically 2–10 ms in visible light). For satellites it must
+   also keep residual image motion (tracking jitter rate × exposure) under about half a pixel.
+   The frame rate follows from the exposure, capped by the data-rate budget.
+2. **Gain sets the signal level.** It puts the target's brightest pixels (e.g. the 99.9th
+   percentile within the target mask) at about 70% of full scale for planets. For satellites
+   it aims at about 50%, leaving headroom for specular glints. If more than about 0.1% of
+   target pixels saturate, it steps down at once.
+3. **Noise regime.** With a faint signal, prefer a gain at or above the sensor's
+   high-conversion-gain switch, where read noise drops sharply on many ZWO sensors. With a
+   bright signal, prefer lower gain for dynamic range.
+
+**Atmospheric inputs measured from the frames:**
+- **r₀ (Fried parameter):** from centroid (tip-tilt) jitter, σ² ≈ 0.17 (λ/D)² (D/r₀)^(5/3).
+- **τ₀ (coherence time):** from how fast a sharpness metric decorrelates between frames.
+- **Transparency:** from the flux trend.
+
+These set the exposure, estimate how many frames will be usable, and are recorded with the data.
+
+**Satellites:** brightness changes by magnitudes during a pass (range, phase angle, glints). A
+prediction from range and phase angle (standard magnitude plus a phase function) adjusts
+exposure and gain ahead of the change; the measured signal corrects it.
+
+**Constraints:**
+- Gain moves in steps for which dark and bias frames exist in the calibration library.
+- Changes are rate-limited (about one every 0.5 s, with hysteresis), because a change takes a
+  few frames to apply and can drop frames.
+- Every frame's exposure and gain go into the recording sidecar. Processing converts frames to
+  a common photometric scale (electrons per second, using the camera's measured gain curve)
+  before stacking.
+
+**Camera profile:** read noise, e⁻/ADU and full well against gain, and the HCG switch point.
+These come from the manufacturer's curves at first and are later measured (photon transfer
+curve from flats and bias frames). The GUI shows Off (manual), Signal (gain only) or Signal
+and seeing, the current r₀ and τ₀, and a histogram with the target level marked.
+
 ## Recording and frame processing
 
 **Recording.** Narrow-field ROI frames are written losslessly as SER (the format planetary and
@@ -331,6 +371,7 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 - [x] iPOS4808 BX-CAT firmware supports CSP (0x6502 bit 7). It has no 0x60B1/0x60B2, so CSP runs without feedforward. Each PDO holds at most 64 bits.
 - [ ] Choose the field rotator: third EtherCAT axis or commercial USB rotator.
 - [ ] Choose the ZWO camera for high-rate ROI capture and check its frame rate at the planned ROI and bit depth; size the recording SSD.
+- [ ] Measure the chosen ZWO camera's photon transfer curve (read noise, e⁻/ADU, full well against gain, HCG switch point) for automatic exposure and gain.
 - [ ] Confirm the iPOS accepts the ADRT sin/cos signal directly; record the encoder line count.
 - [ ] Check REE2000 max output frequency and drive encoder input bandwidth against worst-case elevation rate.
 - [ ] Measure azimuth cable-wrap travel allowed by the through-axis cables.
