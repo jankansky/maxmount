@@ -91,6 +91,7 @@ class MountService:
         self._offsets = mpb.Offsets()
         self._control: tracker.TrackControl | None = None
         self._worker: threading.Thread | None = None
+        self._path: list = []
         self._clock: clock.ClockStatus | None = None
         self._clock_checked = 0.0
 
@@ -271,12 +272,14 @@ class MountService:
         if old_worker:
             old_worker.join(timeout=10)
         d_az, d_el = self._offsets.az_arcsec * ARCSEC, self._offsets.el_arcsec * ARCSEC
+        path = self._sky_path(target, plan)
         with self._lock:
             self._gen += 1
             gen = self._gen
             control = tracker.TrackControl(on_phase=lambda phase: self._on_phase(gen, phase))
             control.set_axis_offsets(d_az, d_el)
             self._target, self._target_kind, self._plan = target, kind, plan
+            self._path = path
             self._state, self._message = "slewing", f"planned {plan.mode} for {target.name}"
             self._control = control
             self._worker = threading.Thread(
@@ -334,6 +337,7 @@ class MountService:
         with self._lock:
             self._state, self._message = "idle", "stopped (holding)" if keep_enabled else "stopped"
             self._target, self._plan, self._control = None, None, None
+            self._path = []
         return mpb.TargetReply(accepted=True, message="stopped")
 
     # -- passes ------------------------------------------------------------------------------
@@ -387,13 +391,33 @@ class MountService:
             st.offsets.CopyFrom(self._offsets)
             st.plan.CopyFrom(plan_summary(self._plan))
             target = self._target
+            path = self._path
+        st.path.extend(path)
         if target is not None:
             try:
-                az, el = target.observed(np.int64(now))
-                st.target_az_deg, st.target_el_deg = float(np.degrees(az)), float(np.degrees(el))
+                t2 = np.array([now, now + 500_000_000], dtype=np.int64)
+                az, el = target.observed(t2)
+                st.target_az_deg, st.target_el_deg = float(np.degrees(az[0])), float(np.degrees(el[0]))
+                daz = (az[1] - az[0] + np.pi) % (2 * np.pi) - np.pi
+                st.target_az_rate_deg_s = float(np.degrees(daz) / 0.5)
+                st.target_el_rate_deg_s = float(np.degrees(el[1] - el[0]) / 0.5)
+                if isinstance(target, SatelliteTarget):
+                    g = target.geometry(now)
+                    st.range_km, st.range_rate_km_s, st.altitude_km = g["range_km"], g["range_rate_km_s"], g["altitude_km"]
+                    st.sunlit = bool(target.sunlit(np.int64(now))[0])
+                    st.tle_line1, st.tle_line2 = target.line1, target.line2
             except Exception:  # noqa: BLE001 - status must not fail
                 pass
         return st
+
+    def _sky_path(self, target, plan) -> list:
+        """The plan's sky track, about 60 points, for the GUI's sky view."""
+        try:
+            t = np.linspace(plan.start_ns, plan.end_ns, min(120, max(2, (plan.end_ns - plan.start_ns) // (5 * NS)))).astype(np.int64)
+            az, el = target.observed(t)
+        except Exception:  # noqa: BLE001
+            return []
+        return [mpb.SkyPoint(t_ns=int(ti), az_deg=float(np.degrees(a)), el_deg=float(np.degrees(e))) for ti, a, e in zip(t, az, el)]
 
     def _status_loop(self) -> None:
         while not self._closing.wait(0.5):

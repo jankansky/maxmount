@@ -7,7 +7,7 @@ Python services that run on the Pi's non-real-time cores and talk over Zenoh.
 | `mount-svc` | Targets (sidereal, SGP4, fixed), ERFA astrometry, pointing model, pass planner, trajectory streaming to `mount-rt` | v0: Zenoh service + command line |
 | `camera-svc` | ZWO and GigE capture, centroiding, plate solving (ASTAP), autofocus | planned |
 | `supervisor` | Safety (sun, weather, clock quality, heartbeats) and the night scheduler | planned |
-| `gui-gateway` | Serves the web GUI; REST + WebSocket bridge to Zenoh | planned |
+| `gui-gateway` | Serves the web GUI; WebSocket bridge to Zenoh (`mount-svc gui`) | v0: Track screen |
 
 ## Install
 

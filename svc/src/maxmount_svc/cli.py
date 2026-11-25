@@ -7,6 +7,7 @@
     mount-svc --system FILE goto --az DEG --el DEG
     mount-svc --system FILE serve                 run as a Zenoh service (GUI, scheduler)
     mount-svc --system FILE request ...           send a request to a running service
+    mount-svc --system FILE gui                   serve the web GUI on port 8080
 
 Tracking commands drive mount-rt over Zenoh; mount-rt must run with --serve.
 """
@@ -277,6 +278,26 @@ def cmd_request(args, sys_: SystemSettings) -> int:
         return 0 if rep.accepted else 1
 
 
+def cmd_gui(args, sys_: SystemSettings) -> int:
+    import asyncio
+
+    from .gateway import Gateway
+
+    async def run():
+        gw = Gateway(sys_, host=args.host, port=args.port, park_az_deg=args.park_az, park_el_deg=args.park_el)
+        await gw.start()
+        print(f"maxmount GUI on http://{args.host}:{args.port} (local network only: no login yet); Ctrl-C to stop")
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop.set)
+        await stop.wait()
+        await gw.stop()
+
+    asyncio.run(run())
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="mount-svc", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--system", required=True, help="config/systems/<name>/system.yaml")
@@ -315,6 +336,13 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("serve", help="run as a Zenoh service for the GUI and scheduler")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("gui", help="serve the web GUI (bridges the browser to Zenoh)")
+    p.add_argument("--host", default="0.0.0.0", help="address to listen on (default all interfaces)")
+    p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--park-az", type=float, default=0.0, help="park azimuth, deg")
+    p.add_argument("--park-el", type=float, default=45.0, help="park elevation, deg")
+    p.set_defaults(func=cmd_gui)
 
     p = sub.add_parser("request", help="send a request to a running 'mount-svc serve'")
     rs = p.add_subparsers(dest="what", required=True)

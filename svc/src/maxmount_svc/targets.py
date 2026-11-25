@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Protocol
 
+import erfa
 import numpy as np
 from sgp4.api import SGP4_ERRORS, Satrec
 
@@ -99,6 +100,34 @@ class SatelliteTarget:
             rel = self._pef_km(t - (dt * 1e9).astype(np.int64)) - self._site_km
         # The Earth rotates while the light travels; at LEO ranges this is a few metres.
         return rel @ self._enu.T
+
+    def sunlit(self, t_ns) -> np.ndarray:
+        """True where the satellite is outside the Earth's shadow (cylindrical shadow model;
+        good to a few seconds at shadow entry and exit)."""
+        t = np.atleast_1d(np.asarray(t_ns, dtype=np.int64))
+        jd1, jd2 = astro.utc_jd(t)
+        _err, r, _v = self._sat.sgp4_array(jd1, jd2)
+        r = np.asarray(r)
+        t1, t2 = astro.tt_jd(t)
+        pvh, _ = erfa.epv00(t1, t2)
+        sun = -np.asarray(pvh["p"])  # geocentric Sun direction (GCRS ~ TEME at this accuracy)
+        sun = sun / np.linalg.norm(sun, axis=-1, keepdims=True)
+        along = np.sum(r * sun, axis=-1)
+        perp = np.linalg.norm(r - along[..., None] * sun, axis=-1)
+        return (along > 0) | (perp > 6378.137)
+
+    def geometry(self, t_ns: int) -> dict:
+        """Range, range rate and altitude (km, km/s) at t."""
+        t = np.array([t_ns, t_ns + 500_000_000], dtype=np.int64)
+        enu = self.geometric_enu_km(t)
+        rng = np.linalg.norm(enu, axis=-1)
+        jd1, jd2 = astro.utc_jd(t[:1])
+        _err, r, _v = self._sat.sgp4_array(jd1, jd2)
+        return {
+            "range_km": float(rng[0]),
+            "range_rate_km_s": float((rng[1] - rng[0]) / 0.5),
+            "altitude_km": float(np.linalg.norm(np.asarray(r)[0]) - 6378.137),
+        }
 
     def observed(self, t_ns):
         scalar = np.ndim(t_ns) == 0

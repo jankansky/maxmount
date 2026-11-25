@@ -10,7 +10,8 @@ remote control.
 > Technosoft iPOS4808 to OP at 1 kHz with distributed clocks (monitor mode). Powered motion on
 > hardware awaits axis commissioning. The Zenoh bridge (`--serve`) accepts trajectories and
 > commands and publishes telemetry. `mount-svc` (Python, [`svc/`](svc/README.md)) plans and
-> tracks stars and satellites through it; camera services and the GUI are not written yet.
+> tracks stars and satellites through it. A web GUI ([`gui/`](gui/README.md)) runs the Track
+> screen through the gateway `mount-svc gui`. Camera services are not written yet.
 
 ## Architecture in one paragraph
 

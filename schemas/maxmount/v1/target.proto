@@ -120,4 +120,22 @@ message ServiceStatus {
   double site_lat_deg = 13;
   double site_lon_deg = 14;
   double site_height_m = 15;
+
+  // The current plan's sky track (observed az/el), sampled every few seconds, for sky views.
+  repeated SkyPoint path = 16;
+  // Live target geometry (satellites: range etc.; zero/false when not applicable).
+  double target_az_rate_deg_s = 17;
+  double target_el_rate_deg_s = 18;
+  double range_km = 19;
+  double range_rate_km_s = 20;
+  double altitude_km = 21;
+  bool sunlit = 22;             // satellite outside the Earth's shadow
+  string tle_line1 = 23;        // satellite targets: the element set in use
+  string tle_line2 = 24;
+}
+
+message SkyPoint {
+  int64 t_ns = 1;
+  double az_deg = 2;
+  double el_deg = 3;
 }

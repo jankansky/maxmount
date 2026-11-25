@@ -17,10 +17,12 @@ dependencies = [
     "eclipse-zenoh==1.10.2",  # must match mount-rt's zenoh-c
     "protobuf>=5.26",
     "grpcio-tools>=1.62",     # bundled protoc: generates maxmount.v1 code matching the runtime
+    "aiohttp>=3.9",           # GUI gateway (HTTP + WebSocket)
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+gui-test = ["playwright>=1.40"]  # browser smoke test; also run: playwright install chromium
 
 [project.scripts]
 mount-svc = "maxmount_svc.cli:main"
