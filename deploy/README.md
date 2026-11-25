@@ -95,7 +95,36 @@ run `sudo build/_deps/soem-build/samples/slaveinfo/slaveinfo eth0 -map`.
 
 Raise socket buffers for GigE Vision: `net.core.rmem_max = 33554432`.
 
-## 3. Time (GNSS + PPS)
+## 3. Time and position (GNSS)
+
+### Now: USB u-blox M8, no PPS
+
+```sh
+sudo apt install -y gpsd gpsd-clients chrony          # chrony replaces systemd-timesyncd
+# /etc/default/gpsd:
+#   DEVICES="/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00"
+#   GPSD_OPTIONS="-n"        # read the receiver even with no clients, so chrony gets time
+#   USBAUTO="false"
+sudo systemctl enable --now gpsd
+sudo install -m 644 deploy/pi/chrony-gps-usb.conf /etc/chrony/conf.d/maxmount-gps.conf
+sudo systemctl restart chrony
+gpspipe -w -n 10 | grep TPV      # "mode":3 = 3D fix; the antenna needs sky
+chronyc sources                   # GPS appears as a refclock next to the network pool
+```
+
+Network time (about 1 ms) is preferred while online; the GPS takes over offline. `mount-svc`
+reads the telescope position from gpsd (`site: {source: gpsd}`), averaging several 3D fixes and
+using the height above the WGS84 ellipsoid. It caches the result in `~/.cache/maxmount`, so the
+last position is used when there is no fix.
+
+**GPS time offset.** Over USB, gpsd labels each second when the message arrives, so GPS time
+lags by a roughly fixed amount. With a fix and the network servers settled (`chronyc sources`
+shows `*` on a server), read the GPS row's offset from `chronyc sourcestats`. Put it into the
+`offset` of the `refclock` line, sign included, and restart chrony; the GPS row's offset should
+then be near zero. USB time stays at the millisecond level, so satellite passes still need
+`--allow-clock-error` until a PPS receiver is wired (below).
+
+### Later: GNSS with PPS on a GPIO
 
 - Wire the GNSS module's PPS output to GPIO 18 (3.3 V logic) and add
   `dtoverlay=pps-gpio,gpiopin=18` to `/boot/firmware/config.txt`.

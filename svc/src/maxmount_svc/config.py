@@ -26,6 +26,7 @@ class Site:
     wavelength_um: float = 0.55
     dut1_s: float = 0.0  # UT1 - UTC; "auto" in the system file reads IERS Bulletin A
     dut1_source: str = "system file"
+    position_source: str = "system file"
 
 
 @dataclass
@@ -103,6 +104,17 @@ def load_system(path: str | Path) -> SystemSettings:
 
     site = None
     s = dict(doc.get("site") or {})
+    if str(s.get("source", "")).strip().lower() == "gpsd":
+        from . import gnss
+
+        try:
+            fix, how = gnss.site_fix(str(s.get("gpsd_host", "localhost")), int(s.get("gpsd_port", 2947)))
+        except gnss.GnssError as e:
+            raise ConfigError(f"site position: {e}") from None
+        s.update(latitude_deg=fix.latitude_deg, longitude_deg=fix.longitude_deg, height_m=fix.height_m)
+        position_source = how
+    else:
+        position_source = "system file"
     if s.get("latitude_deg") is not None and s.get("longitude_deg") is not None:
         auto_dut1 = str(s.get("dut1_s", "")).strip().lower() == "auto"
         if auto_dut1:
@@ -115,6 +127,7 @@ def load_system(path: str | Path) -> SystemSettings:
 
             site.dut1_s, source = iers.dut1_at(time.time_ns())
             site.dut1_source = source
+        site.position_source = position_source
 
     t = doc.get("tracking") or {}
     tracking = Tracking(**{k: float(v) for k, v in t.items() if k in Tracking.__dataclass_fields__})

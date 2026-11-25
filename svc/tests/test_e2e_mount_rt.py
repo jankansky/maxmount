@@ -92,8 +92,10 @@ def test_slew_and_track_a_moving_target(served):
     assert axes["az"].flags & 2
     a_end, _ = plan.mech(plan.end_ns)
     v_end = (plan.mech(plan.end_ns)[0] - plan.mech(plan.end_ns - NS // 10)[0])[0] * 10
-    overshoot = v_end**2 / (2 * settings.az.max_acc)
-    assert abs(abs(axes["az"].act_position_rad - a_end[0]) - overshoot) < 0.05 * DEG
+    max_overshoot = v_end**2 / (2 * settings.az.max_acc)  # stopping at the axis acceleration
+    # Where exactly it stops depends on when the last points ran out (host timing); the safety
+    # property is that the stop is bounded. The C++ limiter tests cover the stop itself.
+    assert abs(axes["az"].act_position_rad - a_end[0]) <= max_overshoot + 0.02 * DEG
 
     ok, msg = client.disable()
     assert ok, msg
