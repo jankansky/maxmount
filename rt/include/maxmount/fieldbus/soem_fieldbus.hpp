@@ -43,6 +43,8 @@ public:
     FieldbusStats stats() const override;
     std::string_view name() const override { return "soem"; }
     nanos cycle_correction_ns() const override;
+    std::optional<std::uint32_t> read_sdo(std::size_t drive, std::uint16_t index, std::uint8_t subindex,
+                                          std::size_t bytes) override;
 
     // Human-readable description of the last start() failure.
     const std::string& last_error() const;

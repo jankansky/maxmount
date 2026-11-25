@@ -13,6 +13,8 @@ struct AxisLimits {
     double max_pos = std::numeric_limits<double>::infinity();   // rad
     double max_vel = 1.0;                                        // rad/s
     double max_acc = 1.0;                                        // rad/s^2
+    // |actual - commanded| above this while enabled quick-stops every axis (rad).
+    double max_following_error = std::numeric_limits<double>::infinity();
 };
 
 struct AxisConfig {

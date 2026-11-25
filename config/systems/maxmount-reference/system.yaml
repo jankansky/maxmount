@@ -1,6 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Reference system: custom alt-az mount, Raspberry Pi 4, two Technosoft iPOS4808 BX-CAT drives.
 # DRAFT: limits below are placeholders until inertia, torque and cable wrap are measured.
+#
+# Per axis:
+#   drive            descriptor in config/drives/<drive>.yaml
+#   bus_position     0-based position on the EtherCAT segment (first drive after the Pi = 0)
+#   counts_per_rev   drive position units per axis revolution; null until commissioned
+#                    (monitor mode then shows raw counts and jogging is refused)
+#   invert           true if positive drive counts move the axis the negative way
+#   offset_deg       axis angle at drive position 0 (refined later by the pointing model)
+#   limits           soft limits and rate limits enforced in mount-rt;
+#                    max_following_error_deg quick-stops all axes (required for --jog).
+#                    The measured error includes speed x ~3 ms of transport delay.
 system: maxmount-reference
 kinematics: altaz_over_the_top
 
@@ -24,22 +35,28 @@ axes:
     bus_position: 0
     mechanics: Aerotech ADRT-150-115 direct drive, sin/cos encoder + Halls
     counts_per_rev: null     # TODO: encoder line count x drive interpolation
+    invert: false
+    offset_deg: 0
     limits:                  # cable wrap set by through-axis USB and Ethernet cables
       min_deg: -270
       max_deg: 270
       max_vel_deg_s: 30
       max_acc_deg_s2: 20
+      max_following_error_deg: 1.0
 
   - name: el
     drive: technosoft_ipos4808_bx_cat
     bus_position: 1
     mechanics: Teknic Hudson M-2321P + Bell-Everman ServoBelt; Renishaw RGH41 + REE2000 load encoder (dual loop)
     counts_per_rev: null     # TODO: 2*pi*r / (tape pitch / interpolation)
+    invert: false
+    offset_deg: 0
     limits:
       min_deg: -45           # mechanical; the horizon mask limits observing
       max_deg: 180           # through zenith to the opposite horizon
       max_vel_deg_s: 10
       max_acc_deg_s2: 10
+      max_following_error_deg: 1.0
 
 cameras:
   widefield: {type: gige, interface: usb-ethernet}

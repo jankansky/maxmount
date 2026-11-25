@@ -46,20 +46,33 @@ std::int32_t Controller::to_velocity_units(const AxisRuntime& ax, double rad_s) 
 void Controller::apply(const Command& c) noexcept {
     switch (c.type) {
         case CommandType::Enable:
-            enabled_ = true;
-            stopping_ = false;
+            if (trip_latched_) break;  // a following-error trip must be acknowledged first
             quick_stop_ = false;
+            for (std::size_t i = 0; i < axes_.size(); ++i) {
+                if (c.axis == kAllAxes || c.axis == i) {
+                    axes_[i].enabled = true;
+                    axes_[i].stopping = false;
+                }
+            }
             break;
         case CommandType::Disable:
-            if (enabled_) stopping_ = true;
+            for (std::size_t i = 0; i < axes_.size(); ++i) {
+                if ((c.axis == kAllAxes || c.axis == i) && axes_[i].enabled) axes_[i].stopping = true;
+            }
             break;
         case CommandType::QuickStop:
             quick_stop_ = true;
-            enabled_ = false;
-            stopping_ = false;
+            for (auto& ax : axes_) {
+                ax.enabled = false;
+                ax.stopping = false;
+            }
             break;
         case CommandType::FaultReset:
-            for (auto& ax : axes_) ax.master.request_fault_reset();
+            for (auto& ax : axes_) {
+                ax.master.request_fault_reset();
+                ax.tripped = false;
+            }
+            trip_latched_ = false;
             break;
         case CommandType::ClearTrajectory:
             for (std::size_t i = 0; i < axes_.size(); ++i) {
@@ -84,32 +97,50 @@ void Controller::cycle(nanos t_now, double dt) noexcept {
     ts.t = t_now;
     ts.cycle = cycle_;
     ts.n_axes = static_cast<std::uint8_t>(axes_.size());
-    ts.enabled = enabled_;
     ts.inputs_fresh = inputs_fresh;
     const FieldbusStats bs = bus_.stats();
     ts.bus_lost_frames = bs.lost_frames;
     ts.bus_wkc_errors = bs.working_counter_errors;
 
-    bool all_at_rest = true;
     for (std::size_t i = 0; i < axes_.size(); ++i) {
         AxisRuntime& ax = axes_[i];
         const Cia402Inputs& in = bus_.inputs(i);
         Cia402Outputs& out = bus_.outputs(i);
 
         const double act = to_axis(ax, ax.unwrap.update(in.position_actual));
-        const std::uint16_t controlword = ax.master.update(in.statusword, enabled_, quick_stop_);
+
+        // Following-error trip. last_cmd was for (t - dt + lead), so the measured error also
+        // contains velocity x (lead + transport delay), about v x 3 ms: keep the limit well
+        // above that at the highest speed. The drive's own following-error protection is the
+        // primary guard; this one catches a mis-scaled or mis-signed axis.
+        if (ax.enabled && ax.master.state() == cia402::State::OperationEnabled &&
+            std::abs(act - ax.last_cmd) > ax.cfg.limits.max_following_error) {
+            ax.tripped = true;
+            trip_latched_ = true;
+            quick_stop_ = true;
+            for (auto& other : axes_) {
+                other.enabled = false;
+                other.stopping = false;
+            }
+        }
+
+        const std::uint16_t controlword = ax.master.update(in.statusword, ax.enabled, quick_stop_);
 
         LimiterOutput o{};
-        std::uint8_t flags = 0;
-        if (ax.master.state() != cia402::State::OperationEnabled) {
+        std::uint8_t flags = ax.tripped ? axis_flags::FollowingErrorTrip : 0;
+        if (ax.master.state() != cia402::State::OperationEnabled || !ax.enabled) {
             // Not under position control: keep the command glued to the actual position so
             // enabling never causes a jump.
             ax.limiter.reset(act);
             o.pos = act;
             flags |= axis_flags::Holding;
-        } else if (stopping_) {
+        } else if (ax.stopping) {
             o = ax.limiter.stop(dt);
             flags |= axis_flags::Holding;
+            if (o.vel == 0.0) {  // at rest: disable operation from the next cycle
+                ax.stopping = false;
+                ax.enabled = false;
+            }
         } else {
             const BufferedSample s = ax.traj.sample(t_now + cfg_.command_lead_ns);
             switch (s.status) {
@@ -131,7 +162,8 @@ void Controller::cycle(nanos t_now, double dt) noexcept {
             }
         }
         if (o.limited) flags |= axis_flags::Limited;
-        if (o.vel != 0.0) all_at_rest = false;
+        ax.last_cmd = o.pos;
+        if (ax.enabled) ts.enabled = true;
 
         out.controlword = controlword;
         out.mode = static_cast<std::int8_t>(cia402::Mode::CyclicSyncPosition);
@@ -152,10 +184,7 @@ void Controller::cycle(nanos t_now, double dt) noexcept {
         at.buffered = static_cast<std::uint32_t>(ax.traj.size());
     }
 
-    if (stopping_ && all_at_rest) {
-        stopping_ = false;
-        enabled_ = false;
-    }
+    ts.tripped = trip_latched_;
 
     if (cfg_.telemetry_decimation <= 1 || cycle_ % cfg_.telemetry_decimation == 0) {
         telemetry_.try_push(ts);  // dropped if the consumer falls behind

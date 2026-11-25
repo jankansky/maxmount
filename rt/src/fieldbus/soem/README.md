@@ -24,19 +24,35 @@ wake-up so frames leave a fixed offset after SYNC0.
 
 ## Running on hardware
 
+`mount-rt` needs `CAP_NET_RAW` (raw socket), `CAP_NET_ADMIN` (promiscuous mode),
+`CAP_SYS_NICE` (SCHED_FIFO) and `CAP_IPC_LOCK` (mlockall). Configure with
+`-DMAXMOUNT_SETCAP=ON` to re-apply them after every build, or run
+`sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt`.
+
 ```sh
-sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt
-build/rt/mount-rt --soem eth0 --descriptor config/drives/technosoft_ipos4808_bx_cat.yaml \
-                  --drives 2 --rt-cpu 3 --duration 0
+build/rt/mount-rt --system config/systems/maxmount-reference/system.yaml            # monitor
+build/rt/mount-rt --system config/systems/maxmount-reference/system.yaml --axes az  # one drive
+build/rt/mount-rt --soem eth0 --descriptor config/drives/technosoft_ipos4808_bx_cat.yaml  # ad hoc
 ```
 
-This is **monitor mode**: it brings the bus to OP and prints each drive's CiA 402 state,
-statusword, error code and position once per second. It never enables the drives.
+**Monitor mode** brings the bus to OP and prints each drive's CiA 402 state, statusword,
+position, following error (0x60F4) and digital inputs (0x60FD) once per second. It never
+enables the drives. When a drive enters Fault its error code (0x603F, not PDO-mappable on
+the iPOS) is read once by SDO and printed.
+
+**Jog mode** (`--jog AXIS --by DEG [--vel DEG_S] [--acc DEG_S2]`) needs the axis's
+`counts_per_rev` and `max_following_error_deg` in the system file. It checks for faults,
+refuses targets outside the soft limits, asks for confirmation, enables only that axis,
+runs a trapezoidal move, holds for a second and disables. A following error above the limit
+quick-stops all axes and latches until a fault reset.
+
+Verified on the reference Pi 4 with one iPOS4808 BX-CAT (fw v10), 2026-11-25: OP with DC
+SYNC0 at 1 kHz, 0 lost frames and 0 working-counter errors over 15 000 cycles, wake-up
+latency below 25 µs.
 
 ## Not done yet
 
 - Slave loss / recovery handling (re-config after a cable is unplugged), as in SOEM's
   `ecatcheck`.
 - Mapping DC time to UTC so commanded positions are tied to the PPS-disciplined clock.
-- Per-axis bus positions and descriptors from `config/systems/*/system.yaml`
-  (monitor mode currently uses one descriptor for drives at positions 0..N-1).
+- Velocity feedforward scaling (the iPOS has no 0x60B1/0x60B2; other drives may).

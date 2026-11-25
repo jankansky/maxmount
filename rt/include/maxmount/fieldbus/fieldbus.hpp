@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "maxmount/common/time.hpp"
@@ -68,6 +69,15 @@ public:
     // Adjustment to add to the next cycle's wake-up time so the host loop stays phase-locked
     // to the bus's distributed clock. Zero for backends without DC.
     virtual nanos cycle_correction_ns() const { return 0; }
+
+    // Non-RT: reads a CoE object (1, 2 or 4 bytes, little-endian, zero-extended) through the
+    // drive's mailbox, e.g. the error code 0x603F after a fault when it is not in the PDOs.
+    // Safe to call from a non-RT thread while the RT thread cycles. nullopt on failure or if
+    // the backend has no mailbox.
+    virtual std::optional<std::uint32_t> read_sdo(std::size_t /*drive*/, std::uint16_t /*index*/,
+                                                  std::uint8_t /*subindex*/, std::size_t /*bytes*/) {
+        return std::nullopt;
+    }
 };
 
 }  // namespace maxmount

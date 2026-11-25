@@ -70,7 +70,7 @@ protected:
 TEST_F(ControllerTest, EnablesAndTracksTrajectory) {
     const Profile p{0.3, 2 * kPi / 8.0};
     push_profile(p, 0.0, 6.0);
-    ctl->post({CommandType::Enable, 0, {}});
+    ctl->post({CommandType::Enable, kAllAxes, {}});
 
     TelemetrySample s = step(200);  // reach t = kT0
     for (std::size_t i = 0; i < 2; ++i) {
@@ -98,7 +98,7 @@ TEST_F(ControllerTest, EnablesAndTracksTrajectory) {
 TEST_F(ControllerTest, StarvationStopsAndHolds) {
     const Profile p{0.3, 2 * kPi / 8.0};
     push_profile(p, 0.0, 1.0);  // only one second of trajectory
-    ctl->post({CommandType::Enable, 0, {}});
+    ctl->post({CommandType::Enable, kAllAxes, {}});
     step(200 + 1000);
     TelemetrySample s = step(2000);
     for (std::size_t i = 0; i < 2; ++i) {
@@ -111,9 +111,9 @@ TEST_F(ControllerTest, StarvationStopsAndHolds) {
 TEST_F(ControllerTest, DisableDeceleratesThenDisables) {
     const Profile p{0.3, 2 * kPi / 8.0};
     push_profile(p, 0.0, 6.0);
-    ctl->post({CommandType::Enable, 0, {}});
+    ctl->post({CommandType::Enable, kAllAxes, {}});
     step(200 + 2000);  // moving at speed
-    ctl->post({CommandType::Disable, 0, {}});
+    ctl->post({CommandType::Disable, kAllAxes, {}});
     TelemetrySample s = step(2000);
     EXPECT_FALSE(s.enabled);
     for (std::size_t i = 0; i < 2; ++i) {
@@ -123,7 +123,7 @@ TEST_F(ControllerTest, DisableDeceleratesThenDisables) {
 }
 
 TEST_F(ControllerTest, FollowingErrorFaultNeedsReset) {
-    ctl->post({CommandType::Enable, 0, {}});
+    ctl->post({CommandType::Enable, kAllAxes, {}});
     step(50);
     bus->drive(0).inject_fault(0x8611);
     TelemetrySample s = step(100);
@@ -139,7 +139,7 @@ TEST_F(ControllerTest, FollowingErrorFaultNeedsReset) {
 TEST_F(ControllerTest, FeasibleTrajectoryIsNeverLimited) {
     const Profile p{60 * kPi / 180, 2 * kPi / 20.0};  // the mount-rt demo az profile
     push_profile(p, 0.0, 10.0);
-    ctl->post({CommandType::Enable, 0, {}});
+    ctl->post({CommandType::Enable, kAllAxes, {}});
     step(200);
     int limited = 0;
     for (int i = 0; i < 8000; ++i) {
@@ -150,4 +150,48 @@ TEST_F(ControllerTest, FeasibleTrajectoryIsNeverLimited) {
         }
     }
     EXPECT_EQ(limited, 0);
+}
+
+TEST_F(ControllerTest, EnablesOnlyTheRequestedAxis) {
+    ctl->post({CommandType::Enable, 1, {}});
+    const TelemetrySample s = step(100);
+    EXPECT_EQ(s.axes[0].state, cia402::State::SwitchOnDisabled);
+    EXPECT_EQ(s.axes[1].state, cia402::State::OperationEnabled);
+    EXPECT_TRUE(s.enabled);
+
+    ctl->post({CommandType::Disable, 1, {}});
+    const TelemetrySample d = step(100);
+    EXPECT_EQ(d.axes[1].state, cia402::State::SwitchOnDisabled);
+    EXPECT_FALSE(d.enabled);
+}
+
+TEST_F(ControllerTest, FollowingErrorTripQuickStopsAndLatches) {
+    // Rebuild with a tiny following-error limit on az so a normal move trips it.
+    std::vector<AxisConfig> axes(2);
+    for (auto& a : axes) {
+        a.counts_per_rad = kCountsPerRad;
+        a.limits = {-3.0, 3.0, 1.0, 1.0};
+    }
+    axes[0].limits.max_following_error = 1e-6;
+    ctl = std::make_unique<Controller>(*bus, axes);
+
+    push_profile(Profile{0.3, 2 * kPi / 8.0}, 0.0, 6.0);
+    ctl->post({CommandType::Enable, kAllAxes, {}});
+    TelemetrySample s = step(200 + 1000);
+    EXPECT_TRUE(s.tripped);
+    EXPECT_FALSE(s.enabled);
+    EXPECT_TRUE(s.axes[0].flags & axis_flags::FollowingErrorTrip);
+    EXPECT_FALSE(s.axes[1].flags & axis_flags::FollowingErrorTrip);
+    EXPECT_NE(s.axes[0].state, cia402::State::OperationEnabled);
+    EXPECT_NE(s.axes[1].state, cia402::State::OperationEnabled);
+
+    ctl->post({CommandType::Enable, kAllAxes, {}});  // ignored while latched
+    s = step(100);
+    EXPECT_FALSE(s.enabled);
+
+    ctl->post({CommandType::FaultReset, 0, {}});
+    ctl->post({CommandType::Enable, 1, {}});
+    s = step(100);
+    EXPECT_FALSE(s.tripped);
+    EXPECT_EQ(s.axes[1].state, cia402::State::OperationEnabled);
 }

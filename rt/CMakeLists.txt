@@ -31,7 +31,9 @@ if (NOT TARGET yaml-cpp::yaml-cpp)
     FetchContent_MakeAvailable(yaml-cpp)
 endif ()
 
-add_library(maxmount_config src/config/drive_descriptor_yaml.cpp)
+add_library(maxmount_config
+        src/config/drive_descriptor_yaml.cpp
+        src/config/system_config_yaml.cpp)
 add_library(maxmount::config ALIAS maxmount_config)
 target_link_libraries(maxmount_config PUBLIC maxmount::rt PRIVATE yaml-cpp::yaml-cpp)
 target_compile_options(maxmount_config PRIVATE ${MAXMOUNT_WARNINGS})
@@ -66,6 +68,17 @@ if (MAXMOUNT_WITH_SOEM)
     target_compile_definitions(mount-rt PRIVATE MAXMOUNT_HAVE_SOEM=1)
 endif ()
 
+# Linking replaces the binary and drops its file capabilities. With MAXMOUNT_SETCAP=ON they
+# are re-applied after every link via passwordless sudo (sudo -n); if that is not available
+# the build prints the command to run instead of failing.
+option(MAXMOUNT_SETCAP "Re-apply mount-rt file capabilities after linking (Linux, sudo -n)" OFF)
+if (MAXMOUNT_SETCAP AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_caps cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep)
+    add_custom_command(TARGET mount-rt POST_BUILD
+            COMMAND sh -c "sudo -n setcap ${_caps} '$<TARGET_FILE:mount-rt>' || echo 'MAXMOUNT_SETCAP: sudo -n failed; run: sudo setcap ${_caps} $<TARGET_FILE:mount-rt>'"
+            VERBATIM)
+endif ()
+
 # ---- Tests ----------------------------------------------------------------------------------
 if (MAXMOUNT_BUILD_TESTS)
     find_package(GTest QUIET)
@@ -85,6 +98,8 @@ if (MAXMOUNT_BUILD_TESTS)
             tests/test_controller.cpp
             tests/test_drive_descriptor.cpp
             tests/test_cyclic_loop.cpp
+            tests/test_move_profile.cpp
+            tests/test_system_config.cpp
     )
     target_link_libraries(maxmount_rt_tests PRIVATE maxmount::config GTest::gtest_main)
     target_compile_definitions(maxmount_rt_tests PRIVATE

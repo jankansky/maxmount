@@ -22,10 +22,10 @@ inline constexpr std::size_t kMaxAxes = 4;
 inline constexpr std::uint8_t kAllAxes = 0xFF;
 
 enum class CommandType : std::uint8_t {
-    Enable,           // bring drives to Operation Enabled and follow the trajectory
-    Disable,          // decelerate to rest, then disable operation
-    QuickStop,        // drive-side quick stop
-    FaultReset,       // request a fault reset on all drives
+    Enable,           // axis = index or kAllAxes: Operation Enabled, follow the trajectory
+    Disable,          // axis = index or kAllAxes: decelerate to rest, then disable
+    QuickStop,        // all axes: drive-side quick stop
+    FaultReset,       // all axes: request a fault reset; also clears a following-error trip
     ClearTrajectory,  // axis = index or kAllAxes
     PushPoint,        // append point to axis
 };
@@ -41,6 +41,7 @@ inline constexpr std::uint8_t Limited = 1u << 0;
 inline constexpr std::uint8_t Starved = 1u << 1;
 inline constexpr std::uint8_t Holding = 1u << 2;
 inline constexpr std::uint8_t BeforeStart = 1u << 3;
+inline constexpr std::uint8_t FollowingErrorTrip = 1u << 4;  // this axis caused the trip
 }  // namespace axis_flags
 
 struct AxisTelemetry {
@@ -60,7 +61,8 @@ struct TelemetrySample {
     nanos t = 0;
     std::uint64_t cycle = 0;
     std::uint8_t n_axes = 0;
-    bool enabled = false;
+    bool enabled = false;       // any axis enabled
+    bool tripped = false;       // following-error trip latched; needs FaultReset to re-enable
     bool inputs_fresh = false;  // fieldbus delivered new inputs this cycle
     std::uint64_t bus_lost_frames = 0;
     std::uint64_t bus_wkc_errors = 0;
@@ -93,6 +95,10 @@ private:
         TrajectoryBuffer traj;
         MotionLimiter limiter;
         PositionUnwrapper unwrap;
+        bool enabled = false;
+        bool stopping = false;
+        bool tripped = false;  // this axis exceeded max_following_error
+        double last_cmd = 0.0;
     };
 
     void apply(const Command& c) noexcept;
@@ -103,9 +109,8 @@ private:
     Fieldbus& bus_;
     ControllerConfig cfg_;
     std::vector<AxisRuntime> axes_;
-    bool enabled_ = false;
-    bool stopping_ = false;
     bool quick_stop_ = false;
+    bool trip_latched_ = false;
     std::uint64_t cycle_ = 0;
     SpscRing<Command, 4096> commands_;
     SpscRing<TelemetrySample, 4096> telemetry_;

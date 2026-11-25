@@ -326,6 +326,24 @@ const Cia402Inputs& SoemFieldbus::inputs(std::size_t drive) const { return impl_
 Cia402Outputs& SoemFieldbus::outputs(std::size_t drive) { return impl_->outputs[drive]; }
 FieldbusStats SoemFieldbus::stats() const { return impl_->stats; }
 nanos SoemFieldbus::cycle_correction_ns() const { return impl_->correction; }
+
+// SOEM keeps mailbox and process-data frames apart (separate buffer indexes under a mutex),
+// so a non-RT thread may read SDOs while the RT thread exchanges process data, as in SOEM's
+// own samples.
+std::optional<std::uint32_t> SoemFieldbus::read_sdo(std::size_t drive, std::uint16_t index,
+                                                    std::uint8_t subindex, std::size_t bytes) {
+    if (!impl_->opened || drive >= impl_->cfg.drives.size() || (bytes != 1 && bytes != 2 && bytes != 4)) {
+        return std::nullopt;
+    }
+    std::uint8_t buf[4] = {};
+    int size = static_cast<int>(bytes);
+    const int wkc = ecx_SDOread(&impl_->ctx, impl_->slave_of(drive), index, subindex, FALSE, &size, buf,
+                                EC_TIMEOUTRXM);
+    if (wkc <= 0 || size <= 0 || size > 4) return std::nullopt;
+    std::uint32_t v = 0;
+    for (int i = 0; i < size; ++i) v |= static_cast<std::uint32_t>(buf[i]) << (8 * i);
+    return v;
+}
 const std::string& SoemFieldbus::last_error() const { return impl_->error; }
 
 }  // namespace maxmount

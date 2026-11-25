@@ -17,9 +17,9 @@ axes:
     drive: sim_cia402
     bus_position: 0
     counts_per_rev: 16777216
-    limits: {min_deg: -270, max_deg: 270, max_vel_deg_s: 30, max_acc_deg_s2: 20}
+    limits: {min_deg: -270, max_deg: 270, max_vel_deg_s: 30, max_acc_deg_s2: 20, max_following_error_deg: 1.0}
   - name: el
     drive: sim_cia402
     bus_position: 1
     counts_per_rev: 16777216
-    limits: {min_deg: -45, max_deg: 180, max_vel_deg_s: 10, max_acc_deg_s2: 10}
+    limits: {min_deg: -45, max_deg: 180, max_vel_deg_s: 10, max_acc_deg_s2: 10, max_following_error_deg: 1.0}

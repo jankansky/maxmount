@@ -5,9 +5,10 @@ high-rate tracking of LEO satellites as well as astronomical targets. A Raspberr
 PREEMPT_RT kernel acts as the EtherCAT master and observatory computer; a web GUI provides
 remote control.
 
-> **Status:** early scaffold. The real-time controller core runs against a simulated
-> CiA 402 drive on any POSIX machine. The SOEM EtherCAT backend has a monitor mode that
-> has not yet been tested on hardware. The Python services, Zenoh bridge and GUI are not
+> **Status:** early development. The real-time controller runs against a simulated CiA 402
+> drive on any POSIX machine. On the reference Pi 4 the SOEM EtherCAT backend brings a
+> Technosoft iPOS4808 to OP at 1 kHz with distributed clocks (monitor mode). Powered motion on
+> hardware awaits axis commissioning. The Python services, Zenoh bridge and GUI are not
 > written yet.
 
 ## Architecture in one paragraph
@@ -41,21 +42,31 @@ ctest --test-dir build --output-on-failure
 ./build/rt/mount-rt --duration 10
 ```
 
-`mount-rt` currently runs two simulated axes through a demonstration trajectory and prints
-tracking telemetry once per second. On Linux it will request `SCHED_FIFO` priority and lock
-memory if permitted (`--rt-prio`, `--rt-cpu`).
+Without options `mount-rt` runs a built-in two-axis simulation through a demonstration
+trajectory and prints tracking telemetry once per second. On Linux it requests `SCHED_FIFO`
+priority, locks memory and pins the loop to a CPU if permitted. Other examples:
+
+```sh
+./build/rt/mount-rt --system config/systems/sim-altaz/system.yaml --jog el --by -5 --vel 2
+./build/rt/mount-rt --help
+```
 
 ### EtherCAT (Linux)
 
 ```sh
-cmake -S . -B build -G Ninja -DMAXMOUNT_WITH_SOEM=ON   # fetches SOEM v2.0.1; needs CMake >= 3.28
+# Fetches SOEM v2.0.1 (needs CMake >= 3.28). MAXMOUNT_SETCAP re-applies the capabilities
+# mount-rt needs after every link, using passwordless sudo.
+cmake -S . -B build -G Ninja -DMAXMOUNT_WITH_SOEM=ON -DMAXMOUNT_SETCAP=ON
 cmake --build build
-sudo setcap cap_net_raw,cap_net_admin,cap_sys_nice,cap_ipc_lock+ep build/rt/mount-rt
-./build/rt/mount-rt --soem eth0 --descriptor config/drives/technosoft_ipos4808_bx_cat.yaml --duration 0
+./build/rt/mount-rt --system config/systems/maxmount-reference/system.yaml --axes az
 ```
 
-This monitor mode brings the bus to OP and reports drive state without ever enabling the
-drives. See [`rt/src/fieldbus/soem/README.md`](rt/src/fieldbus/soem/README.md).
+On an EtherCAT system `mount-rt` defaults to **monitor mode**: it brings the bus to OP and
+reports drive state, position, following error and digital inputs without ever enabling the
+drives. `--axes` selects the drives present on a test bench. Once an axis is commissioned
+and its `counts_per_rev` is set in the system file, `--jog AXIS --by DEG` performs a
+supervised move of that axis alone. Ctrl-C decelerates and disables; press it twice to
+quick-stop. See [`rt/src/fieldbus/soem/README.md`](rt/src/fieldbus/soem/README.md).
 
 To build and test the Linux configuration from macOS, use the container in
 [`tools/docker`](tools/docker/linux-build.Dockerfile) (arm64 matches the Pi 4):

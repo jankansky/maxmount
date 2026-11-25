@@ -29,6 +29,7 @@ public:
     void inject_fault(std::uint16_t error_code) noexcept;
 
     const Cia402Inputs& inputs() const noexcept { return in_; }
+    std::uint16_t error_code() const noexcept { return error_code_; }
     cia402::State state() const noexcept { return state_; }
     double position() const noexcept { return pos_; }
     double velocity() const noexcept { return vel_; }
@@ -63,6 +64,12 @@ public:
     Cia402Outputs& outputs(std::size_t drive) override { return outputs_[drive]; }
     FieldbusStats stats() const override { return stats_; }
     std::string_view name() const override { return "sim"; }
+    // Only the error code (0x603F) is modelled.
+    std::optional<std::uint32_t> read_sdo(std::size_t drive, std::uint16_t index, std::uint8_t subindex,
+                                          std::size_t /*bytes*/) override {
+        if (drive >= drives_.size() || index != 0x603F || subindex != 0) return std::nullopt;
+        return drives_[drive].error_code();
+    }
 
     SimCia402Drive& drive(std::size_t i) { return drives_[i]; }
 
