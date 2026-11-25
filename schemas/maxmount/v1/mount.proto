@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Mount interface between mount-svc / GUI and mount-rt (draft).
+// Mount interface between mount-svc / GUI and mount-rt.
+// Zenoh keys are listed in schemas/zenoh-keys.md.
 //
 // Conventions:
 //  - Time: int64 nanoseconds since the Unix epoch (POSIX/UTC, CLOCK_REALTIME on a
@@ -35,14 +36,25 @@ message MountCommand {
   }
 }
 
-message Enable {}
-message Disable {}
+// Enabling requires mount-rt to run in serve mode, the axis to be commissioned
+// (counts_per_rev set) and, on hardware, a following-error limit.
+message Enable {
+  string axis = 1;  // empty = all axes
+}
+// Decelerate to rest at the axis limits, then disable.
+message Disable {
+  string axis = 1;  // empty = all axes
+}
+// All axes: drive-side quick stop.
 message QuickStop {}
+// All axes: reset drive faults and a latched following-error trip.
 message FaultReset {}
 message ClearTrajectory {
   string axis = 1;  // empty = all axes
 }
 
+// accepted = the command passed validation and was queued for the controller; its effect
+// shows up in telemetry.
 message CommandReply {
   bool accepted = 1;
   string message = 2;
@@ -68,8 +80,12 @@ message AxisTelemetry {
   DriveState state = 5;
   uint32 statusword = 6;
   uint32 error_code = 7;
-  uint32 flags = 8;  // bit0 limited, bit1 starved, bit2 holding, bit3 before-start
+  // bit0 limited, bit1 starved, bit2 holding, bit3 before-start,
+  // bit4 this axis caused a following-error trip
+  uint32 flags = 8;
   uint32 buffered_points = 9;
+  int32 following_error_counts = 10;  // drive-reported (0x60F4), if mapped
+  uint32 digital_inputs = 11;         // raw 0x60FD, if mapped
 }
 
 message LoopStats {
@@ -78,12 +94,20 @@ message LoopStats {
   int64 max_wake_latency_ns = 3;
 }
 
+message BusStats {
+  uint64 lost_frames = 1;
+  uint64 working_counter_errors = 2;
+}
+
 message MountTelemetry {
-  int64 t_ns = 1;
+  int64 t_ns = 1;       // scheduled cycle time
   uint64 cycle = 2;
-  bool enabled = 3;
+  bool enabled = 3;     // any axis enabled
   repeated AxisTelemetry axes = 4;
-  LoopStats loop = 5;
+  LoopStats loop = 5;   // only in the decimated mount/telemetry stream
+  bool tripped = 6;     // following-error trip latched; FaultReset clears it
+  bool inputs_fresh = 7;
+  BusStats bus = 8;
 }
 
 // High-rate telemetry is published in batches to keep message rates reasonable.

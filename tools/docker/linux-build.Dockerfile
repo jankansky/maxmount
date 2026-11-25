@@ -5,5 +5,6 @@ FROM debian:trixie
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build git ca-certificates \
         libyaml-cpp-dev libgtest-dev iproute2 \
+        protobuf-compiler libprotobuf-dev libcap2-bin sudo \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src

@@ -21,6 +21,18 @@ struct AxisEntry {
     double counts_per_rev = 0.0;  // as configured (unsigned); 0 when unknown
 };
 
+// Optional `zenoh:` section. Without it mount-rt runs without the Zenoh bridge.
+struct ZenohConfig {
+    bool enabled = false;
+    std::string site = "default";       // keys live under maxmount/<site>/
+    std::string config_file;            // optional Zenoh JSON5 config; overrides the fields below
+    std::string mode = "peer";          // peer, client or router
+    std::vector<std::string> connect;   // e.g. tcp/192.168.1.10:7447
+    std::vector<std::string> listen;
+    bool multicast_scouting = true;
+    bool publish_raw = true;            // every-cycle telemetry on mount/telemetry/raw
+};
+
 struct SystemConfig {
     std::string name;
     std::string backend = "sim";  // "sim" or "soem"
@@ -30,6 +42,7 @@ struct SystemConfig {
     int rt_priority = 80;
     nanos command_lead = 1'000'000;
     std::vector<AxisEntry> axes;  // controller axis i is drive i on the bus, in this order
+    ZenohConfig zenoh;
 
     const AxisEntry* find_axis(const std::string& name) const;
 };

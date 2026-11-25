@@ -9,6 +9,9 @@
 //   --jog AXIS --by DEG
 //               supervised point-to-point move of one axis (enables only that axis), then
 //               disable. Asks for confirmation on hardware unless --yes.
+//   --serve     accept trajectories and commands over Zenoh (mount-svc, GUI) until Ctrl-C.
+// With a `zenoh:` section in the system file (and -DMAXMOUNT_WITH_ZENOH=ON) telemetry is
+// published in every mode; only --serve accepts commands.
 // Ctrl-C: first press decelerates and disables the drives, a second press quick-stops them.
 // The real-time loop keeps running until the drives are disabled.
 #include <algorithm>
@@ -32,6 +35,9 @@
 #include "maxmount/core/realtime.hpp"
 #include "maxmount/sim/sim_fieldbus.hpp"
 #include "maxmount/trajectory/move_profile.hpp"
+#if defined(MAXMOUNT_HAVE_ZENOH)
+#include "maxmount/bridge/zenoh_bridge.hpp"
+#endif
 #if defined(MAXMOUNT_HAVE_SOEM)
 #include "maxmount/fieldbus/soem_fieldbus.hpp"
 #endif
@@ -48,7 +54,7 @@ constexpr double kDeg = kPi / 180.0;
 constexpr double kArcsec = kDeg / 3600.0;
 constexpr nanos kSecond = 1'000'000'000;
 
-enum class Mode { Default, Monitor, Demo, Jog };
+enum class Mode { Default, Monitor, Demo, Jog, Serve };
 
 struct Options {
     std::string system_path;
@@ -60,6 +66,7 @@ struct Options {
     std::string jog_axis;
     std::optional<double> jog_by_deg, jog_vel_deg_s, jog_acc_deg_s2;
     bool yes = false;
+    bool no_zenoh = false;
     // ad-hoc EtherCAT monitor without a system file
     std::string soem_interface, descriptor_path;
     int drives = 1;
@@ -75,6 +82,8 @@ void usage() {
         "      --vel DEG_S       jog speed (default 1, capped by the axis limit)\n"
         "      --acc DEG_S2      jog acceleration (default 2, capped by the axis limit)\n"
         "      --yes             skip the confirmation prompt\n"
+        "  --serve               accept trajectories and commands over Zenoh until Ctrl-C\n"
+        "  --no-zenoh            do not start the Zenoh bridge even if configured\n"
         "options:\n"
         "  --system FILE         system configuration (default: built-in simulation)\n"
         "  --axes A,B            use only these axes, e.g. a test bench with one drive\n"
@@ -119,6 +128,8 @@ Options parse(int argc, char** argv) {
         else if (a == "--axes") o.axes = split_list(next());
         else if (a == "--monitor") o.mode = Mode::Monitor;
         else if (a == "--demo") o.mode = Mode::Demo;
+        else if (a == "--serve") o.mode = Mode::Serve;
+        else if (a == "--no-zenoh") o.no_zenoh = true;
         else if (a == "--jog") { o.mode = Mode::Jog; o.jog_axis = next(); }
         else if (a == "--by") o.jog_by_deg = num();
         else if (a == "--vel") o.jog_vel_deg_s = num();
@@ -216,12 +227,19 @@ public:
         cc.command_lead_ns = sys_.command_lead;
         controller_ = std::make_unique<Controller>(*bus_, axes, cc);
         start_rt_thread();
+        // Keep this thread, and the Zenoh threads it starts, off the real-time core.
+        if (!avoid_cpu(sys_.rt_cpu)) std::printf("note: could not move non-RT threads off CPU %d\n", sys_.rt_cpu);
+        if (!start_bridge()) {
+            shutdown();
+            return 1;
+        }
 
         int rc = 0;
         switch (mode_) {
             case Mode::Monitor: rc = run_monitor(); break;
             case Mode::Demo: rc = run_demo(); break;
             case Mode::Jog: rc = run_jog(); break;
+            case Mode::Serve: rc = run_serve(); break;
             case Mode::Default: break;
         }
         if (!shutdown()) rc = rc ? rc : 1;
@@ -237,6 +255,17 @@ private:
         if (mode_ == Mode::Demo && hardware()) {
             std::fprintf(stderr, "--demo is simulation-only; use --jog for supervised moves on hardware\n");
             return 2;
+        }
+        if (mode_ == Mode::Serve) {
+#if !defined(MAXMOUNT_HAVE_ZENOH)
+            std::fprintf(stderr, "--serve needs mount-rt built with -DMAXMOUNT_WITH_ZENOH=ON\n");
+            return 2;
+#else
+            if (!sys_.zenoh.enabled || opt_.no_zenoh) {
+                std::fprintf(stderr, "--serve needs a zenoh: section in the system file\n");
+                return 2;
+            }
+#endif
         }
         if (mode_ == Mode::Demo && sys_.axes.size() > 2) {
             std::fprintf(stderr, "--demo supports at most 2 axes\n");
@@ -328,8 +357,63 @@ private:
 
     // Drains telemetry into last_, tracks per-axis max |actual - previous command| and reads
     // the error code (by SDO) of any drive that has entered Fault.
+    // Why an axis may not be enabled from Zenoh (empty = allowed).
+    std::string enable_refusal(std::size_t i) const {
+        const config::AxisEntry& a = sys_.axes[i];
+        if (!a.scaled) return "axis '" + a.axis.name + "' has no counts_per_rev (not commissioned)";
+        if (hardware() && std::isinf(a.axis.limits.max_following_error)) {
+            return "axis '" + a.axis.name + "' has no max_following_error_deg";
+        }
+        return {};
+    }
+
+    bool start_bridge() {
+        if (!sys_.zenoh.enabled || opt_.no_zenoh) return true;
+#if defined(MAXMOUNT_HAVE_ZENOH)
+        bridge::BridgeOptions o;
+        o.zenoh = sys_.zenoh;
+        for (const auto& a : sys_.axes) o.axis_names.push_back(a.axis.name);
+        o.cycle = sys_.cycle;
+        o.accept_commands = mode_ == Mode::Serve;
+        o.reject_reason = "mount-rt is not in serve mode";
+        // Runs on a Zenoh thread: reads only immutable configuration and the sample passed in.
+        o.validate = [this](const Command& c, const TelemetrySample& last) -> std::string {
+            if (c.type != CommandType::Enable) return {};
+            if (last.tripped) return "following-error trip latched; send FaultReset first";
+            for (std::size_t i = 0; i < sys_.axes.size(); ++i) {
+                if (c.axis != kAllAxes && c.axis != i) continue;
+                if (std::string why = enable_refusal(i); !why.empty()) return why;
+                if (last.axes[i].state == cia402::State::Fault) {
+                    return "axis '" + sys_.axes[i].axis.name + "' is in Fault; send FaultReset first";
+                }
+            }
+            return {};
+        };
+        try {
+            bridge_ = std::make_unique<bridge::ZenohBridge>(o);
+            bridge_->start();
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "Zenoh bridge failed to start: %s\n", e.what());
+            return false;
+        }
+        std::printf("zenoh: %s on %s* (%s)\n", mode_ == Mode::Serve ? "serving" : "publishing telemetry",
+                    bridge_->key("").c_str(), sys_.zenoh.mode.c_str());
+#else
+        std::printf("note: system file has a zenoh section but mount-rt was built without Zenoh\n");
+#endif
+        return true;
+    }
+
     void pump() {
+#if defined(MAXMOUNT_HAVE_ZENOH)
+        if (bridge_) bridge_->forward(*controller_);
+        const bridge::LoopSnapshot loop{loop_->stats().cycles.load(), loop_->stats().overruns.load(),
+                                        loop_->stats().max_wake_latency_ns.load()};
+#endif
         while (auto s = controller_->poll_telemetry()) {
+#if defined(MAXMOUNT_HAVE_ZENOH)
+            if (bridge_) bridge_->on_telemetry(*s, loop);
+#endif
             if (!s->inputs_fresh) ++stale_;
             for (std::size_t i = 0; i < s->n_axes; ++i) {
                 if (s->axes[i].state == cia402::State::OperationEnabled) {
@@ -405,13 +489,28 @@ private:
                 next_report += kSecond;
                 report(t0);
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            std::this_thread::sleep_for(std::chrono::milliseconds(mode_ == Mode::Serve ? 5 : 20));
         }
     }
 
     nanos deadline_from(double default_s) const {
         const double s = opt_.duration_s < 0 ? default_s : opt_.duration_s;
         return s > 0 ? realtime_ns() + static_cast<nanos>(s * 1e9) : INT64_MAX;
+    }
+
+    int run_serve() {
+        std::printf("serving: waiting for trajectories and commands (Ctrl-C to stop)\n");
+        const nanos t0 = realtime_ns();
+        loop_until(deadline_from(0), t0, [] { return true; });
+#if defined(MAXMOUNT_HAVE_ZENOH)
+        if (bridge_) {
+            const auto st = bridge_->stats();
+            std::printf("zenoh: %llu trajectories, %llu commands, %llu rejected, %llu telemetry messages\n",
+                        static_cast<unsigned long long>(st.trajectories), static_cast<unsigned long long>(st.commands),
+                        static_cast<unsigned long long>(st.rejected), static_cast<unsigned long long>(st.published));
+        }
+#endif
+        return 0;
     }
 
     int run_monitor() {
@@ -560,6 +659,13 @@ private:
     // the RT thread and the bus. True if the drives ended disabled.
     bool shutdown() {
         const int interrupts_at_start = g_interrupts.load();
+#if defined(MAXMOUNT_HAVE_ZENOH)
+        // Stop taking commands first so nothing can re-enable the drives while stopping.
+        if (bridge_) {
+            bridge_->stop();
+            bridge_.reset();
+        }
+#endif
         pump();
         bool ok = true;
         if (last_.enabled) {
@@ -609,6 +715,9 @@ private:
     std::thread rt_thread_;
     std::atomic<bool> rt_stop_{false};
 
+#if defined(MAXMOUNT_HAVE_ZENOH)
+    std::unique_ptr<bridge::ZenohBridge> bridge_;
+#endif
     TelemetrySample last_{};
     bool have_telemetry_ = false;
     std::uint64_t stale_ = 0;

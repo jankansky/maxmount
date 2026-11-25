@@ -8,8 +8,9 @@ remote control.
 > **Status:** early development. The real-time controller runs against a simulated CiA 402
 > drive on any POSIX machine. On the reference Pi 4 the SOEM EtherCAT backend brings a
 > Technosoft iPOS4808 to OP at 1 kHz with distributed clocks (monitor mode). Powered motion on
-> hardware awaits axis commissioning. The Python services, Zenoh bridge and GUI are not
-> written yet.
+> hardware awaits axis commissioning. The Python services and GUI are not written yet. The
+> Zenoh bridge (`--serve`) accepts trajectories and commands and publishes
+> telemetry; `mount-ctl` is a command-line client for it.
 
 ## Architecture in one paragraph
 
@@ -68,13 +69,26 @@ and its `counts_per_rev` is set in the system file, `--jog AXIS --by DEG` perfor
 supervised move of that axis alone. Ctrl-C decelerates and disables; press it twice to
 quick-stop. See [`rt/src/fieldbus/soem/README.md`](rt/src/fieldbus/soem/README.md).
 
+### Zenoh bridge
+
+```sh
+cmake -S . -B build -G Ninja -DMAXMOUNT_WITH_ZENOH=ON   # needs Protobuf; fetches zenoh-c 1.10.2
+cmake --build build
+./build/rt/mount-rt --system config/systems/sim-altaz/system.yaml --serve
+./build/rt/mount-ctl --system config/systems/sim-altaz/system.yaml watch     # another terminal
+```
+
+`--serve` accepts trajectories and commands from `mount-svc`, the GUI or `mount-ctl`. With a
+`zenoh:` section in the system file every other mode publishes telemetry too. See
+[`rt/src/bridge/README.md`](rt/src/bridge/README.md).
+
 To build and test the Linux configuration from macOS, use the container in
 [`tools/docker`](tools/docker/linux-build.Dockerfile) (arm64 matches the Pi 4):
 
 ```sh
 docker build -t maxmount-linux-build -f tools/docker/linux-build.Dockerfile tools/docker
 docker run --rm -v "$PWD":/src:ro maxmount-linux-build bash -c \
-  'cmake -S /src -B /tmp/b -G Ninja -DMAXMOUNT_WITH_SOEM=ON && cmake --build /tmp/b && ctest --test-dir /tmp/b'
+  'cmake -S /src -B /tmp/b -G Ninja -DMAXMOUNT_WITH_SOEM=ON -DMAXMOUNT_WITH_ZENOH=ON && cmake --build /tmp/b && ctest --test-dir /tmp/b'
 ```
 
 ## Reference hardware

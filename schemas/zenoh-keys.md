@@ -1,14 +1,16 @@
-# Zenoh key expressions (draft)
+# Zenoh key expressions
 
-All keys live under `maxmount/<site>/`. Payloads are Protobuf messages from
-[`maxmount/v1`](maxmount/v1/) unless noted.
+All keys live under `maxmount/<site>/`, where `<site>` comes from the `zenoh.site` entry of
+the system file. Payloads are Protobuf messages from [`maxmount/v1`](maxmount/v1/) unless
+noted. The `mount/*` keys are implemented by `mount-rt` (`rt/src/bridge`); the rest are
+planned.
 
 | Key | Kind | Payload | Producer → consumer |
 | --- | --- | --- | --- |
-| `mount/trajectory` | put | `TrajectoryUpdate` | mount-svc → mount-rt |
+| `mount/trajectory` | put | `TrajectoryUpdate` | mount-svc → mount-rt (serve mode only) |
 | `mount/cmd` | queryable | `MountCommand` → `CommandReply` | GUI, scheduler → mount-rt |
 | `mount/telemetry` | pub (50 Hz) | `MountTelemetry` | mount-rt → all |
-| `mount/telemetry/raw` | pub (batched 1 kHz) | `MountTelemetryBatch` | mount-rt → loggers, camera-svc |
+| `mount/telemetry/raw` | pub (every cycle, in batches of 50) | `MountTelemetryBatch` | mount-rt → loggers, camera-svc |
 | `mount/target` | queryable / pub | target and tracking state (TBD) | mount-svc |
 | `camera/<id>/preview` | pub | JPEG/H.264 frame (TBD) | camera-svc → GUI |
 | `camera/<id>/centroid` | pub | measured offset + mid-exposure time (TBD) | camera-svc → mount-svc |
@@ -16,5 +18,11 @@ All keys live under `maxmount/<site>/`. Payloads are Protobuf messages from
 | `safety/status` | pub | safe/unsafe + reasons (TBD) | supervisor → all |
 | `weather/*` | pub | sensor readings (TBD) | weather service → supervisor |
 
-Rule: `mount-rt` never calls Zenoh from its real-time thread. A bridge thread moves data
-between Zenoh and the controller's lock-free rings.
+Rule: `mount-rt` never calls Zenoh from its real-time thread. Zenoh callbacks only decode,
+validate and queue. The main thread, the controller's single command producer, drains that
+queue into the controller's lock-free ring and publishes telemetry.
+
+`mount/cmd` replies with `accepted: false` and a reason when `mount-rt` is not in serve mode
+(monitor, jog, demo), for an unknown axis, or when enabling an axis that is not commissioned.
+In serve mode a trajectory that runs out (for example when mount-svc stops) makes the axes
+decelerate and hold, so a crashed client cannot leave the mount moving.

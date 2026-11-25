@@ -24,6 +24,11 @@ RealtimeSetup configure_realtime_thread(int priority, int cpu);
 
 void sleep_until_monotonic(nanos deadline) noexcept;
 
+// Restricts the calling thread (and threads it creates later, such as Zenoh's workers) to every
+// CPU except `cpu`, keeping them off the real-time core. No-op if cpu < 0 or not on Linux.
+// Returns false if the affinity could not be set.
+bool avoid_cpu(int cpu);
+
 struct LoopStats {
     std::atomic<std::uint64_t> cycles{0};
     std::atomic<std::uint64_t> overruns{0};

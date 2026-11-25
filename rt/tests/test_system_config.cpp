@@ -98,3 +98,28 @@ TEST(SystemConfig, RepositorySystemsLoad) {
     EXPECT_EQ(sim.backend, "sim");
     EXPECT_TRUE(sim.axes[0].scaled);
 }
+
+TEST(SystemConfig, ParsesZenohSection) {
+    const std::string axis =
+        "axes:\n  - {name: az, drive: sim_cia402, bus_position: 0, limits: {min_deg: -1, max_deg: 1, "
+        "max_vel_deg_s: 1, max_acc_deg_s2: 1}}\n";
+    const SystemConfig none = parse_system_config("fieldbus: {backend: sim}\n" + axis, kDrives);
+    EXPECT_FALSE(none.zenoh.enabled);
+
+    const SystemConfig z = parse_system_config(
+        "fieldbus: {backend: sim}\nzenoh: {site: lab, mode: client, connect: [tcp/10.0.0.2:7447], "
+        "multicast_scouting: false, publish_raw: false}\n" + axis,
+        kDrives);
+    EXPECT_TRUE(z.zenoh.enabled);
+    EXPECT_EQ(z.zenoh.site, "lab");
+    EXPECT_EQ(z.zenoh.mode, "client");
+    ASSERT_EQ(z.zenoh.connect.size(), 1u);
+    EXPECT_EQ(z.zenoh.connect[0], "tcp/10.0.0.2:7447");
+    EXPECT_FALSE(z.zenoh.multicast_scouting);
+    EXPECT_FALSE(z.zenoh.publish_raw);
+
+    EXPECT_THROW(parse_system_config("fieldbus: {backend: sim}\nzenoh: {site: a/b}\n" + axis, kDrives),
+                 std::runtime_error);
+    EXPECT_THROW(parse_system_config("fieldbus: {backend: sim}\nzenoh: {mode: mesh}\n" + axis, kDrives),
+                 std::runtime_error);
+}

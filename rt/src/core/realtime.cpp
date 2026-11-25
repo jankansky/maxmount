@@ -59,6 +59,21 @@ RealtimeSetup configure_realtime_thread(int priority, int cpu) {
     return r;
 }
 
+bool avoid_cpu(int cpu) {
+#if defined(__linux__)
+    if (cpu < 0) return true;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) != 0) return false;
+    CPU_CLR(cpu, &set);
+    if (CPU_COUNT(&set) == 0) return false;
+    return pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
+#else
+    (void)cpu;
+    return true;
+#endif
+}
+
 void sleep_until_monotonic(nanos deadline) noexcept {
 #if defined(__linux__)
     // std::steady_clock is CLOCK_MONOTONIC on Linux, so deadlines share its time base.

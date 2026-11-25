@@ -8,7 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(MAXMOUNT_BUILD_TESTS "Build unit tests" ON)
-option(MAXMOUNT_WITH_SOEM "Build the SOEM EtherCAT backend (Linux only; not implemented yet)" OFF)
+option(MAXMOUNT_WITH_ZENOH "Build the Zenoh bridge (needs Protobuf; downloads zenoh-c if not installed)" OFF)
+option(MAXMOUNT_WITH_SOEM "Build the SOEM EtherCAT backend (Linux only)" OFF)
 
 if (MAXMOUNT_BUILD_TESTS)
     enable_testing()

@@ -98,6 +98,32 @@ SystemConfig parse_system_config(const std::string& yaml_text, const std::string
         if (rt["command_lead_us"]) sys.command_lead = to_int(rt["command_lead_us"], "realtime.command_lead_us") * 1000;
     }
 
+    if (const YAML::Node z = root["zenoh"]; z && !z.IsNull()) {
+        if (!z.IsMap()) fail("zenoh must be a mapping");
+        ZenohConfig& zc = sys.zenoh;
+        zc.enabled = z["enabled"] ? z["enabled"].as<bool>() : true;
+        if (z["site"]) zc.site = to_string(z["site"], "zenoh.site");
+        if (zc.site.empty() || zc.site.find_first_of("/*$?#") != std::string::npos) {
+            fail("zenoh.site must be a non-empty name without / * $ ? #");
+        }
+        if (z["config"] && !z["config"].IsNull()) zc.config_file = to_string(z["config"], "zenoh.config");
+        if (z["mode"]) zc.mode = to_string(z["mode"], "zenoh.mode");
+        if (zc.mode != "peer" && zc.mode != "client" && zc.mode != "router") {
+            fail("zenoh.mode must be peer, client or router");
+        }
+        auto list = [](const YAML::Node& n, const char* what) {
+            std::vector<std::string> out;
+            if (!n || n.IsNull()) return out;
+            if (!n.IsSequence()) fail(std::string(what) + " must be a list");
+            for (const auto& e : n) out.push_back(to_string(e, what));
+            return out;
+        };
+        zc.connect = list(z["connect"], "zenoh.connect");
+        zc.listen = list(z["listen"], "zenoh.listen");
+        if (z["multicast_scouting"]) zc.multicast_scouting = z["multicast_scouting"].as<bool>();
+        if (z["publish_raw"]) zc.publish_raw = z["publish_raw"].as<bool>();
+    }
+
     const YAML::Node axes = root["axes"];
     if (!axes || !axes.IsSequence() || axes.size() == 0) fail("axes must be a non-empty list");
     if (axes.size() > kMaxSystemAxes) fail("at most 4 axes are supported");

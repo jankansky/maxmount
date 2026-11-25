@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 find_package(Threads REQUIRED)
 include(FetchContent)
+if (POLICY CMP0135)  # extracted archives get the extraction time (CMake >= 3.24)
+    cmake_policy(SET CMP0135 NEW)
+endif ()
 
 set(MAXMOUNT_WARNINGS $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Wshadow>)
 
@@ -59,6 +62,96 @@ if (MAXMOUNT_WITH_SOEM)
     target_compile_options(maxmount_soem PRIVATE ${MAXMOUNT_WARNINGS})
 endif ()
 
+# ---- Zenoh bridge (optional) ----------------------------------------------------------------
+# Needs Protobuf (protoc + libprotobuf) and zenoh-c/zenoh-cpp. Installed zenoh packages are
+# used if found (e.g. libzenohc-dev from the Eclipse Debian repository); otherwise the pinned
+# prebuilt release archives are downloaded. Zenoh is EPL-2.0 OR Apache-2.0 (used under
+# Apache-2.0, which is compatible with GPLv3).
+if (MAXMOUNT_WITH_ZENOH)
+    set(MAXMOUNT_ZENOH_VERSION 1.10.2)
+    set(_zenoh_prebuilt OFF)
+    find_package(zenohc ${MAXMOUNT_ZENOH_VERSION} QUIET)
+    if (NOT TARGET zenohc::lib)
+        set(_zenoh_prebuilt ON)
+        set(_zbase https://github.com/eclipse-zenoh/zenoh-c/releases/download/${MAXMOUNT_ZENOH_VERSION})
+        string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _cpu)
+        if (APPLE AND _cpu MATCHES "arm64|aarch64")
+            set(_zfile aarch64-apple-darwin)
+            set(_zsha 633312653225a83093ce62b4440c96892bf735f29e1cf50355a43ab1c99e9964)
+        elseif (APPLE)
+            set(_zfile x86_64-apple-darwin)
+            set(_zsha 64eaa7a9ae93c4abb309dc18aef678730f0376c1a6ef6bdf501a3597701880dd)
+        elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND _cpu MATCHES "aarch64|arm64")
+            set(_zfile aarch64-unknown-linux-gnu)
+            set(_zsha 0fdafdf08cee6f0da361735da159cd6cbe4dfcf351ee578cb0ea9f05ce083b47)
+        elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND _cpu MATCHES "x86_64|amd64")
+            set(_zfile x86_64-unknown-linux-gnu)
+            set(_zsha d2da2ac370381d553cb6619abe23549966b80207687ebea6de9c4a491fda5f67)
+        else ()
+            message(FATAL_ERROR "No prebuilt zenoh-c for ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}; "
+                    "install zenoh-c ${MAXMOUNT_ZENOH_VERSION} and set zenohc_DIR")
+        endif ()
+        FetchContent_Declare(zenohc_prebuilt
+                URL ${_zbase}/zenoh-c-${MAXMOUNT_ZENOH_VERSION}-${_zfile}-standalone.zip
+                URL_HASH SHA256=${_zsha})
+        FetchContent_MakeAvailable(zenohc_prebuilt)
+        find_package(zenohc ${MAXMOUNT_ZENOH_VERSION} REQUIRED CONFIG
+                PATHS ${zenohc_prebuilt_SOURCE_DIR}/lib/cmake NO_DEFAULT_PATH)
+    endif ()
+    find_package(zenohcxx ${MAXMOUNT_ZENOH_VERSION} QUIET)
+    if (NOT TARGET zenohcxx::zenohc)
+        FetchContent_Declare(zenohcxx_prebuilt
+                URL https://github.com/eclipse-zenoh/zenoh-cpp/releases/download/${MAXMOUNT_ZENOH_VERSION}/zenohcpp-${MAXMOUNT_ZENOH_VERSION}-standalone.zip
+                URL_HASH SHA256=3df2c5192dd02e330b56c737764fc4ec8e9d8087e77099c910c23cab98434ed1)
+        FetchContent_MakeAvailable(zenohcxx_prebuilt)
+        find_package(zenohcxx ${MAXMOUNT_ZENOH_VERSION} REQUIRED CONFIG
+                PATHS ${zenohcxx_prebuilt_SOURCE_DIR}/lib/cmake NO_DEFAULT_PATH)
+    endif ()
+
+    # One target for the C++ API. The prebuilt archives are linked statically: their shared
+    # library carries the CI build path as its install name (macOS), and a static mount-rt
+    # needs no library path on the Pi. The macOS static target names frameworks by the CI
+    # machine's Xcode path, so replace those with plain -framework flags.
+    add_library(maxmount_zenoh INTERFACE)
+    get_target_property(_zcxx_inc zenohcxx::zenohc INTERFACE_INCLUDE_DIRECTORIES)
+    target_include_directories(maxmount_zenoh SYSTEM INTERFACE ${_zcxx_inc})
+    target_compile_definitions(maxmount_zenoh INTERFACE ZENOHCXX_ZENOHC)
+    if (zenohc_DIR MATCHES "zenohc_prebuilt-src")  # also on reconfigure, via the cache
+        set(_zenoh_prebuilt ON)
+    endif ()
+    if (_zenoh_prebuilt)
+        if (APPLE)
+            set_property(TARGET __zenohc_static PROPERTY INTERFACE_LINK_LIBRARIES
+                    "-framework Foundation" "-framework Security")
+        endif ()
+        target_link_libraries(maxmount_zenoh INTERFACE zenohc::static)
+    else ()
+        target_link_libraries(maxmount_zenoh INTERFACE zenohc::lib)
+    endif ()
+
+    # Protobuf: prefer the CMake package config (Homebrew, recent protobuf); fall back to
+    # CMake's FindProtobuf (Debian's libprotobuf-dev).
+    find_package(Protobuf CONFIG QUIET)
+    if (NOT Protobuf_FOUND)
+        find_package(Protobuf REQUIRED)
+    endif ()
+    set(_proto_out ${CMAKE_CURRENT_BINARY_DIR}/proto)
+    file(MAKE_DIRECTORY ${_proto_out})
+    add_library(maxmount_proto ${PROJECT_SOURCE_DIR}/schemas/maxmount/v1/mount.proto)
+    target_link_libraries(maxmount_proto PUBLIC protobuf::libprotobuf)
+    target_include_directories(maxmount_proto PUBLIC ${_proto_out})
+    protobuf_generate(TARGET maxmount_proto LANGUAGE cpp
+            IMPORT_DIRS ${PROJECT_SOURCE_DIR}/schemas
+            PROTOC_OUT_DIR ${_proto_out})
+
+    add_library(maxmount_bridge src/bridge/codec.cpp src/bridge/zenoh_bridge.cpp)
+    add_library(maxmount::bridge ALIAS maxmount_bridge)
+    target_link_libraries(maxmount_bridge
+            PUBLIC maxmount::config
+            PRIVATE maxmount_proto maxmount_zenoh)
+    target_compile_options(maxmount_bridge PRIVATE ${MAXMOUNT_WARNINGS})
+endif ()
+
 # ---- Applications ---------------------------------------------------------------------------
 add_executable(mount-rt apps/mount_rt_main.cpp)
 target_link_libraries(mount-rt PRIVATE maxmount::config)
@@ -66,6 +159,14 @@ target_compile_options(mount-rt PRIVATE ${MAXMOUNT_WARNINGS})
 if (MAXMOUNT_WITH_SOEM)
     target_link_libraries(mount-rt PRIVATE maxmount::soem)
     target_compile_definitions(mount-rt PRIVATE MAXMOUNT_HAVE_SOEM=1)
+endif ()
+if (MAXMOUNT_WITH_ZENOH)
+    target_link_libraries(mount-rt PRIVATE maxmount::bridge)
+    target_compile_definitions(mount-rt PRIVATE MAXMOUNT_HAVE_ZENOH=1)
+
+    add_executable(mount-ctl apps/mount_ctl_main.cpp)
+    target_link_libraries(mount-ctl PRIVATE maxmount::config maxmount_proto maxmount_zenoh)
+    target_compile_options(mount-ctl PRIVATE ${MAXMOUNT_WARNINGS})
 endif ()
 
 # Linking replaces the binary and drops its file capabilities. With MAXMOUNT_SETCAP=ON they
@@ -102,6 +203,10 @@ if (MAXMOUNT_BUILD_TESTS)
             tests/test_system_config.cpp
     )
     target_link_libraries(maxmount_rt_tests PRIVATE maxmount::config GTest::gtest_main)
+    if (MAXMOUNT_WITH_ZENOH)
+        target_sources(maxmount_rt_tests PRIVATE tests/test_bridge_codec.cpp tests/test_zenoh_bridge.cpp)
+        target_link_libraries(maxmount_rt_tests PRIVATE maxmount::bridge maxmount_proto maxmount_zenoh)
+    endif ()
     target_compile_definitions(maxmount_rt_tests PRIVATE
             MAXMOUNT_CONFIG_DIR="${PROJECT_SOURCE_DIR}/config")
     gtest_discover_tests(maxmount_rt_tests)

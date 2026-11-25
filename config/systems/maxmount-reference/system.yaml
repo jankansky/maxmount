@@ -29,6 +29,15 @@ time:
   pps_device: /dev/pps0      # GNSS module with PPS on a GPIO pin
   max_clock_error_us: 10     # refuse satellite passes above this
 
+# Zenoh bridge (needs mount-rt built with -DMAXMOUNT_WITH_ZENOH=ON). Keys: maxmount/<site>/mount/...
+zenoh:
+  site: lab
+  mode: peer              # peer, client or router
+  connect: []             # e.g. ["tcp/192.168.1.10:7447"] to reach a router or the laptop
+  listen: []
+  multicast_scouting: true
+  publish_raw: true       # every-cycle telemetry on mount/telemetry/raw
+
 axes:
   - name: az
     drive: technosoft_ipos4808_bx_cat

@@ -103,6 +103,21 @@ Raise socket buffers for GigE Vision: `net.core.rmem_max = 33554432`.
 - Run `gpsd` on the receiver's serial/USB port and use [`pi/chrony.conf`](pi/chrony.conf).
 - The existing USB u-blox M8 (`1546:01a8`) provides position and a coarse time reference only.
 
-## 4. Services
+## 4. Build on the Pi
+
+```sh
+sudo apt install -y build-essential cmake ninja-build git libyaml-cpp-dev libgtest-dev \
+                    protobuf-compiler libprotobuf-dev
+git clone https://github.com/jankansky/maxmount.git && cd maxmount
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DMAXMOUNT_WITH_SOEM=ON -DMAXMOUNT_WITH_ZENOH=ON -DMAXMOUNT_SETCAP=ON
+cmake --build build && ctest --test-dir build
+```
+
+zenoh-c 1.10.2 is downloaded as a prebuilt aarch64 archive and linked statically. If you
+prefer Eclipse's Debian packages (`libzenohc-dev` from download.eclipse.org/zenoh/debian-repo),
+CMake uses them instead.
+
+## 5. Services
 
 systemd units for `mount-rt`, `mount-svc` and the Zenoh router will be added as they are written.
