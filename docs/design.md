@@ -137,6 +137,61 @@ only the site terms.
 - **Autofocus:** half-flux-radius curve fit; triggered by temperature change, filter change, side flip, elapsed time and before scheduled passes; learned µm/°C compensation between runs.
 - **Rotator:** needed early; see [Field rotator](#field-rotator).
 
+## Camera service
+
+The operations screen is built around the two camera views. The corrections (timing,
+perpendicular, nudge) only make sense next to the images, so `camera-svc` provides:
+
+- **Calibrated image geometry** per camera: pixel scale, orientation relative to the mount axes,
+  the rotator angle and the boresight pixel. Plate solving measures scale and orientation; a
+  short calibration move measures the mapping to az/el. With it the GUI can draw the predicted
+  position and path, the narrow-field box inside the widefield view, and the along-track and
+  perpendicular directions on each frame.
+- **Time-stamped previews:** compressed frames (JPEG or H.264) to the GUI, each carrying its
+  mid-exposure UTC. The GUI draws overlays on top, so they stay sharp and switchable.
+- **Detections:** widefield blob detection and narrow-field centroids, published with their
+  times. The camera loop turns them into along-track and cross-track offsets for `mount-svc`
+  (`svc/target` set_offsets).
+- **Click to point:** an image position converted to an az/el offset (narrow field: centre
+  here; widefield: point the C8 there).
+- **Manual and automatic correction share one path.** In Auto the camera loop drives the
+  offsets and the buttons add to them; in Manual only the buttons do.
+
+## Recording and frame processing
+
+**Recording.** Narrow-field ROI frames are written losslessly as SER (the format planetary and
+satellite imagers use, readable by AutoStakkert!, PIPP, Siril and WinJUPOS), with per-frame UTC
+timestamps. A sidecar file holds, per frame: the commanded and actual axis angles (from
+`mount/telemetry/raw`), the target's predicted az/el, range and range rate, the active offsets,
+exposure, gain, ROI position, rotator angle and focuser position. Widefield frames can be recorded
+the same way. Data rate example: a 512×512 ROI at 120 fps is 31 MB/s at 8 bits and 63 MB/s at
+16 bits, so recording goes to a USB 3 SSD. Full-frame high-rate capture is limited by the Pi 4's
+shared USB 3 bandwidth.
+
+**Replay.** The GUI plays a recording with a time scrubber, synchronised telemetry and
+overlays, and can export it as a movie (H.264/H.265 MP4 via ffmpeg, or a lossless TIFF/PNG
+sequence). The caption shows UTC, elevation and range.
+
+**Processing** runs offline, on the laptop or a workstation (the Pi 4 is too slow for
+deconvolving thousands of frames). It produces one processed frame per time window and can
+string them into a movie of the best-resolution frames. There are two modes, which differ in
+what limits the window:
+
+| | Planetary | Satellite pass |
+| --- | --- | --- |
+| What changes during a window | The planet rotates | The satellite's pose relative to the line of sight changes, and its range (image scale) changes |
+| Window limit | Equatorial motion π·D/P below about half a resolution element. C8 at 0.55 µm (0.68″): Jupiter (45″, 9.93 h) about 85 s; Mars (25″, 24.6 h) several minutes | Pose rate ω (from the ephemeris and an attitude assumption such as ISS LVLH) moves a feature at radius r by r·ω·t; keep it below about half the resolution on the target, θ·range. ISS at 500 km: 1.6 m resolution, ω ≈ 1°/s near culmination, r = 50 m gives about 0.9 s |
+| Extending the window | De-rotation of the planet's disc before stacking | None beyond the window: windows slide along the pass |
+| Alignment | Global shift plus many local alignment points | Similarity transform (shift, rotation, scale), seeded by predicted range and field rotation; then local alignment points |
+| Frame selection | Best few percent by sharpness (e.g. Laplacian energy) within each window | Same, per window. Fewer frames per window, so a higher frame rate matters |
+| Restoration | Stack, then deconvolution (Richardson–Lucy or Wiener with a measured or modelled PSF) or wavelet sharpening | Same, with a PSF from seeing plus diffraction, sized to the stack's measured sharpness |
+| Output | Single image, or a rotation movie from sliding windows | Movie of processed windows across the pass, captioned with UTC, elevation, range and phase angle |
+
+The window lengths are computed from the target and the optics and offered as defaults; the
+user can override them. Sliding windows overlap so the processed movie runs smoothly. Every
+processed frame keeps its time range and the frames it used, so results can be traced back to
+the recording. Because the SER files are standard, any stage can also be done in existing tools.
+
 ## Field rotator
 
 On an alt-az mount the field turns during an exposure at
@@ -216,8 +271,9 @@ so dense, full-featured layouts are fine.
 5. Tracking control: along-track and cross-track adjustments, az/el pad with step sizes, reset.
 6. Telemetry: command vs actual, following error, loop latency, bus errors.
 7. Drives (commissioning and maintenance): states, decoded faults, reset, limit and home inputs, supervised jog.
-8. Cameras: widefield and narrow previews, click to center, detection overlay.
-9. Sequences and campaigns; pointing model runs and residuals; rotator.
+8. Cameras: widefield and narrow-field views with overlays, click to point, record, with the corrections bar beneath them.
+9. Recordings: replay with telemetry, movie export, planetary and satellite processing jobs.
+10. Sequences and campaigns; pointing model runs and residuals; rotator.
 
 Dark theme by default with a red night mode. Monospace figures for positions and times.
 Safety-critical state is never more than a glance away.
@@ -263,16 +319,18 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 6. **GUI core:** gateway, status bar, sky view, targets, satellites, tracking control, telemetry, drives panel. *Gate:* a pass and a star tracked from the GUI alone.
 7. **Field rotator:** rotator axis or service, parallactic-angle derotation. *Gate:* 120 s subframes at 60° elevation with ≤ 1 px corner smear.
 8. **Interoperability:** ASCOM Alpaca/INDI mount driver. *Gate:* an Ekos or N.I.N.A. sequence runs end to end.
-9. **Closed loop:** widefield acquisition, ZWO ROI tracking, offset corrections. *Gate:* target held in the C8 field for a full pass.
-10. **Daytime safety:** Sun keep-out in `mount-rt` for all motion. *Gate:* no motion command, slew or offset can enter the zone.
-11. **Sequencer and campaigns:** astrophotography sequences, SOCRATES campaigns. *Gate:* a full night without intervention.
-12. **Fast movers:** ADS-B source; visual tracking with widefield detection. *Gate:* an aircraft and a bird held in the C8 field.
-13. **Observatory:** focuser and autofocus, weather, power, safety supervisor. *Gate:* fault-injection suite passes.
+9. **Closed loop:** camera service with calibrated geometry, widefield acquisition, ZWO ROI tracking, offset corrections. *Gate:* target held in the C8 field for a full pass.
+10. **Recording and processing:** SER recording with sidecar telemetry, replay and movie export, planetary and satellite processing modes. *Gate:* a processed ISS pass movie with windows set from the pose rate.
+11. **Daytime safety:** Sun keep-out in `mount-rt` for all motion. *Gate:* no motion command, slew or offset can enter the zone.
+12. **Sequencer and campaigns:** astrophotography sequences, SOCRATES campaigns. *Gate:* a full night without intervention.
+13. **Fast movers:** ADS-B source; visual tracking with widefield detection. *Gate:* an aircraft and a bird held in the C8 field.
+14. **Observatory:** focuser and autofocus, weather, power, safety supervisor. *Gate:* fault-injection suite passes.
 
 ## Open items and risks
 
 - [x] iPOS4808 BX-CAT firmware supports CSP (0x6502 bit 7). It has no 0x60B1/0x60B2, so CSP runs without feedforward. Each PDO holds at most 64 bits.
 - [ ] Choose the field rotator: third EtherCAT axis or commercial USB rotator.
+- [ ] Choose the ZWO camera for high-rate ROI capture and check its frame rate at the planned ROI and bit depth; size the recording SSD.
 - [ ] Confirm the iPOS accepts the ADRT sin/cos signal directly; record the encoder line count.
 - [ ] Check REE2000 max output frequency and drive encoder input bandwidth against worst-case elevation rate.
 - [ ] Measure azimuth cable-wrap travel allowed by the through-axis cables.
