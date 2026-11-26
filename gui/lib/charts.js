@@ -146,6 +146,42 @@ function endLabels(ctx, [ax, ay], [lx, ly], color) {
   ctx.fillText('AOS', ax + 8, ay); ctx.fillText('LOS', lx + 8, ly);
 }
 
+// Sun-altitude bands: day, civil (0 to -6), nautical (-6 to -12), astronomical (-12 to -18)
+// twilight, night. Drawn at half resolution and scaled up smoothly; cached per canvas and minute.
+const BAND_ALPHA = [0, 0.22, 0.36, 0.5, 0.62];
+const layerCache = new WeakMap();
+function parseColor(str) {
+  const m = str.match(/rgba?\(([^)]+)\)/);
+  if (m) { const v = m[1].split(',').map(Number); return [v[0], v[1], v[2], v.length > 3 ? v[3] : 1]; }
+  const hex = str.replace('#', '');
+  return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)).concat(1);
+}
+function lightingLayer(canvas, w, h, sun, lonAt, latAt, now) {
+  const day = cssVar('--day'), night = cssVar('--night-deep');
+  const key = [w, h, lonAt(0), lonAt(w), latAt(0), Math.floor(now.getTime() / 60000), day, night].join('|');
+  const hit = layerCache.get(canvas);
+  if (hit && hit.key === key) return hit.img;
+  const cw = Math.max(1, Math.ceil(w / 2)), ch = Math.max(1, Math.ceil(h / 2));
+  const img = document.createElement('canvas'); img.width = cw; img.height = ch;
+  const g = img.getContext('2d'), data = g.createImageData(cw, ch), px = data.data;
+  const [dr, dg, db, da] = parseColor(day), [nr, ng, nb] = parseColor(night);
+  const sd = Math.sin(sun.dec * DEG), cd = Math.cos(sun.dec * DEG);
+  for (let j = 0; j < ch; j++) {
+    const lat = latAt(((j + 0.5) / ch) * h) * DEG, sl = Math.sin(lat), cl = Math.cos(lat);
+    for (let i = 0; i < cw; i++) {
+      const H = (lonAt(((i + 0.5) / cw) * w) - sun.lon) * DEG;
+      const alt = Math.asin(sl * sd + cl * cd * Math.cos(H)) / DEG;
+      const o = 4 * (j * cw + i);
+      if (alt >= 0) { px[o] = dr; px[o + 1] = dg; px[o + 2] = db; px[o + 3] = Math.round(da * 255); continue; }
+      const band = alt > -6 ? 1 : alt > -12 ? 2 : alt > -18 ? 3 : 4;
+      px[o] = nr; px[o + 1] = ng; px[o + 2] = nb; px[o + 3] = Math.round(BAND_ALPHA[band] * 255);
+    }
+  }
+  g.putImageData(data, 0, 0);
+  layerCache.set(canvas, { key, img });
+  return img;
+}
+
 // Approximate subsolar point (good to ~0.1 deg; enough to shade the night side).
 function subsolar(date) {
   const d = date.getTime() / 86400000 - 10957.5; // days since J2000.0
@@ -199,18 +235,18 @@ export function drawMap(canvas, { land = null, track = null, now = new Date() })
       ctx.fill();
     }
   }
-  // Night side.
+  // Daylight, twilight and night at `now` (the pass time for a preview), and the subsolar point.
   const s = subsolar(now);
-  ctx.fillStyle = cssVar('--night');
-  const north = s.dec < 0; // the dark pole
-  for (const k of copies) {
-    ctx.beginPath(); ctx.moveTo(X(-180 + k), Y(north ? 90 : -90));
-    for (let lon = -180; lon <= 180; lon += 3) {
-      const H = (lon - s.lon) * DEG;
-      const lat = Math.atan(-Math.cos(H) / Math.tan(Math.abs(s.dec) < 0.05 ? 0.05 * DEG : s.dec * DEG)) / DEG;
-      ctx.lineTo(X(lon + k), Y(lat));
+  ctx.drawImage(lightingLayer(canvas, w, h, s, (px) => lon0 + (px / w) * span, (py) => top - (py / h) * (span / 2), now), 0, 0, w, h);
+  ctx.fillStyle = cssVar('--sun'); ctx.strokeStyle = cssVar('--sun'); ctx.lineWidth = 1.5;
+  for (const k of [-360, 0, 360]) {
+    const [x, y] = [X(s.lon + k), Y(s.dec)];
+    if (x < -10 || x > w + 10 || y < -10 || y > h + 10) continue;
+    ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
+    for (let a = 0; a < 8; a++) {
+      const c = Math.cos((a * Math.PI) / 4), d = Math.sin((a * Math.PI) / 4);
+      ctx.beginPath(); ctx.moveTo(x + 8 * c, y + 8 * d); ctx.lineTo(x + 11 * c, y + 11 * d); ctx.stroke();
     }
-    ctx.lineTo(X(180 + k), Y(north ? 90 : -90)); ctx.closePath(); ctx.fill();
   }
   // Graticule (30 deg on the world view, 10 deg zoomed in).
   const step = span > 120 ? 30 : 10;

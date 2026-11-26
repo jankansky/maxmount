@@ -409,7 +409,9 @@ function SkyPanel({ status, tel, hello, track, land }) {
 function PassViews({ status, tel, hello, track, land, preview }) {
   const mapRef = useRef(null), skyRef = useRef(null);
   useEffect(() => {
-    if (mapRef.current) drawMap(mapRef.current, { land, track: preview?.ground || (status?.tle_line1 ? track : null) });
+    // A preview shows day and night at the pass's highest point; otherwise now.
+    const when = preview ? new Date(Number(preview.row.culmination_ns) / 1e6) : new Date();
+    if (mapRef.current) drawMap(mapRef.current, { land, track: preview?.ground || (status?.tle_line1 ? track : null), now: when });
     if (skyRef.current) drawSky(skyRef.current, {
       maskEl: hello?.tracking?.horizon_min_el_deg ?? 10,
       path: (status?.path || []).map((p) => [Number(p.az_deg), Number(p.el_deg)]),
@@ -423,7 +425,7 @@ function PassViews({ status, tel, hello, track, land, preview }) {
     <section class="panel" aria-label="Ground track">
       <div class="head"><h2>Ground track</h2><span class="small">${preview ? preview.row.name : status?.tle_line1 ? status.target_name + ' (live)' : ''}</span></div>
       <canvas ref=${mapRef} role="img" aria-label="Map: ground track, visibility circle, site"></canvas>
-      <span class="small">${preview ? 'Thick: above the horizon mask, AOS to LOS · thin: 15 min either side · circle: visible at culmination · triangle: site'
+      <span class="small">${preview ? `Thick: above the horizon mask, AOS to LOS · thin: 15 min either side · circle: visible at culmination · triangle: site · shading: day, civil / nautical / astronomical twilight and night at ${utc(preview.row.culmination_ns)} UTC (max el)`
         : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask'
         : 'Select a pass in the table to see its ground track.'}</span>
     </section>

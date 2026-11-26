@@ -28,7 +28,9 @@ it, **Drives** (`#drives`).
   selected, the map zooms to it: thick line above the horizon mask (AOS to LOS), thin 15 min
   either side, the visibility circle at culmination, and the site. The sky dome shows the path
   from AOS to LOS, solid where the satellite is sunlit and dotted in shadow. With nothing
-  selected they show the live target.
+  selected they show the live target. The map shades daylight, civil, nautical and
+  astronomical twilight and night, and marks the subsolar point: at the pass's highest point
+  for a preview, otherwise now.
 - **Upcoming passes** from a CelesTrak group, with each plan's mode and peak rate, and **Track**.
   - **Objects** is either the watch list or **all in group** (every object, up to 400;
     passes are planned when you select one).
