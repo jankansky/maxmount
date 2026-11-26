@@ -67,6 +67,14 @@ class DslrSettings:
 
 
 @dataclass
+class ZwoSettings:
+    backend: str = "sdk"              # sdk | sim
+    sdk_lib: str = "/usr/local/lib/libASICamera2.so"  # ZWO's ASI SDK library (from ZWO's developer page)
+    data_dir: str = "~/maxmount-data"  # frames go to <data_dir>/zwo/<date>/
+    liveview_fps: float = 8.0         # preview frames to the GUI (the camera streams faster)
+
+
+@dataclass
 class AdsbSettings:
     # readsb/dump1090 aircraft.json: a path, or an http(s) URL on the local network
     # (e.g. tar1090's http://host/tar1090/data/aircraft.json).
@@ -173,6 +181,7 @@ class SystemSettings:
     adsb: AdsbSettings = field(default_factory=AdsbSettings)
     imaging: ImagingSettings = field(default_factory=ImagingSettings)
     dslr: DslrSettings = field(default_factory=DslrSettings)
+    zwo: ZwoSettings = field(default_factory=ZwoSettings)
 
 
 class ConfigError(RuntimeError):
@@ -292,6 +301,8 @@ def load_system(path: str | Path) -> SystemSettings:
         imaging=_imaging(doc),
         dslr=DslrSettings(**{k: (float(v) if k == "liveview_fps" else str(v))
                              for k, v in ((doc.get("cameras") or {}).get("dslr") or {}).items() if k in DslrSettings.__dataclass_fields__}),
+        zwo=ZwoSettings(**{k: (float(v) if k == "liveview_fps" else str(v))
+                           for k, v in ((doc.get("cameras") or {}).get("zwo") or {}).items() if k in ZwoSettings.__dataclass_fields__}),
         adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
                              for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),
     )

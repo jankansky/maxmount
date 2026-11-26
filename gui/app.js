@@ -253,7 +253,69 @@ function DslrPanel({ cam, frames, send, now }) {
     <div class="dslr-info">
       <canvas ref=${histRef} class="hist" role="img" aria-label="Histogram"></canvas>
       <span class="small mono">${shown ? `median ${Math.round(shown.median)} · 99% ${Math.round(shown.p99)} · saturated ${(shown.saturated_frac * 100).toFixed(2)}%` : ''}
-        <br />${cam.message}${frames?.capture?.files?.length ? html`<br /><span class="muted">${frames.capture.files.join(', ')}</span>` : ''}</span>
+        <br />${cam.message}${frames?.capture?.files?.length ? html`<br /><span class="muted" title=${frames.capture.files.join('\n')}>${frames.capture.files.map((f) => f.split('/').pop()).join(', ')}</span>` : ''}</span>
+    </div>
+  </section>`;
+}
+
+// A numeric camera setting. Uncontrolled (keyed on the camera's value) so the 10 Hz redraws
+// do not overwrite typing; a new value is sent on Enter or when the field loses focus.
+function NumSetting({ st, cmd, disabled }) {
+  const send = (e) => { if (e.target.value !== st.value && e.target.value !== '') cmd({ set: { name: st.name, value: e.target.value } }); };
+  return html`<label>${st.label} <input key=${st.value} type="number" aria-label=${st.label} defaultValue=${st.value}
+    min=${st.min} max=${st.max} step=${st.step || 'any'} style="width:84px" disabled=${disabled || st.read_only}
+    onChange=${send} onKeyDown=${(e) => e.key === 'Enter' && e.target.blur()} />${st.unit ? ` ${st.unit}` : ''}</label>`;
+}
+
+// ZWO camera on the C8 (`mount-svc zwo`): video with ROI, exposure, gain, offset, format, bin
+// and USB bandwidth; Capture saves one frame as FITS on the Pi.
+function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
+  const [zoom, setZoom] = useState(false);
+  const histRef = useRef(null);
+  const live = cam?.liveview && frames?.live;
+  const shown = live ? frames.live : frames?.capture;
+  useEffect(() => { if (histRef.current) drawHist(histRef.current, shown?.histogram || []); });
+  const title = `C8 · ${cam?.model || profile?.camera || 'ZWO'}`;
+  const hint = dslrRunning ? html`<br /><br />The D500 camera service is running: if the D500 is on the C8, choose its profile in the header's <b>Imaging</b> menu.` : '';
+  if (!cam) {
+    return html`<${CameraPanel} title=${title} label="C8 camera" info="ROI" square=${true}>
+      ZWO camera service not running. Start it on the Pi with <code>mount-svc --system $SYS zwo</code>
+      (add <code>--sim</code> to try it without the camera).${hint}<//>`;
+  }
+  const cmd = (args) => send('camera', { camera_id: cam.camera_id || 'zwo', ...args });
+  const busy = cam.state === 'exposing' || cam.state === 'downloading';
+  const off = !cam.connected || busy;
+  const field = (n) => {
+    const st = (cam.settings || []).find((x) => x.name === n);
+    if (!st) return null;
+    if (st.numeric) return html`<${NumSetting} st=${st} cmd=${cmd} disabled=${off} />`;
+    return html`<label>${st.label} <${Select} aria-label=${st.label} value=${st.value} disabled=${off || st.read_only}
+      options=${st.choices.map((c) => [c, c])} onChange=${(v) => cmd({ set: { name: n, value: v } })} /></label>`;
+  };
+  const roi = cam.roi?.length === 4 ? `${cam.roi[2]}×${cam.roi[3]}` : '';
+  const temp = Number.isFinite(cam.temperature_c) ? ` · ${Number(cam.temperature_c).toFixed(1)} °C` : '';
+  return html`<section class="panel camera wide zwo" aria-label="C8 camera">
+    <div class="head"><h2>${title}</h2>
+      <span class="small mono">${cam.connected ? `${cam.state}${cam.liveview ? ` · ${Number(cam.fps).toFixed(1)} fps` : ''}${Number(cam.dropped) ? ` · ${cam.dropped} dropped` : ''}${temp}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
+    <div class=${'camview img' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre" onClick=${() => setZoom(!zoom)}>
+      ${shown ? html`<img alt=${live ? 'live view' : 'last frame'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
+        : html`<span>${cam.connected ? 'Start video, or capture a frame.' : cam.message}${cam.connected ? '' : hint}</span>`}
+      ${shown && html`<span class="tag">${live ? `LIVE · ${roi}` : `last frame · ${shown.exposure_s * 1000} ms · gain ${shown.gain} · ${shown.bit_depth}-bit`}${zoom ? ' · 3×' : ''}</span>`}
+    </div>
+    <div class="toolbar">
+      <button class=${'btn' + (cam.liveview ? ' on' : '')} aria-pressed=${!!cam.liveview} disabled=${off}
+        onClick=${() => cmd({ liveview: !cam.liveview })}>${cam.liveview ? 'Video on' : 'Video'}</button>
+      ${field('exposure_ms')}${field('gain')}${field('offset')}
+    </div>
+    <div class="toolbar">
+      ${field('image_type')}${field('bin')}${field('roi')}${field('bandwidth')}
+      <label class="check"><input type="checkbox" checked=${!!cam.stretch} onChange=${(e) => cmd({ stretch: e.target.checked })} /> Stretch</label>
+      <button class="btn primary" disabled=${off} onClick=${() => cmd({ capture: { bulb_s: 0 } })}>${busy ? 'Saving…' : 'Capture frame'}</button>
+    </div>
+    <div class="dslr-info">
+      <canvas ref=${histRef} class="hist" role="img" aria-label="Histogram"></canvas>
+      <span class="small mono">${shown ? `median ${Math.round(shown.median)} · 99% ${Math.round(shown.p99)} · saturated ${(shown.saturated_frac * 100).toFixed(2)}%` : ''}
+        <br />${cam.message}${frames?.capture?.files?.length ? html`<br /><span class="muted" title=${frames.capture.files.join('\n')}>${frames.capture.files.map((f) => f.split('/').pop()).join(', ')}</span>` : ''}</span>
     </div>
   </section>`;
 }
@@ -264,11 +326,7 @@ const c8Service = (p) => p?.camera_service || (/nikon|canon|dslr/i.test(p?.camer
 
 function C8Panel({ profile, cameras, camFrames, send, now }) {
   if (c8Service(profile) === 'dslr') return html`<${DslrPanel} cam=${cameras.dslr} frames=${camFrames.dslr} send=${send} now=${now} />`;
-  const hint = cameras.dslr?.connected
-    ? html`<br /><br />The D500 camera service is running: if the D500 is on the C8, choose its profile in the header's <b>Imaging</b> menu.` : '';
-  return html`<${CameraPanel} title=${`C8 · ${profile?.camera || 'ZWO'}`} label="C8 camera" info="ROI" square=${true}>
-    ZWO camera service not built yet.<br />Live frames, ROI tracking and click-to-point arrive with it.${hint}
-  <//>`;
+  return html`<${ZwoPanel} cam=${cameras.zwo} frames=${camFrames.zwo} send=${send} profile=${profile} dslrRunning=${!!cameras.dslr?.connected} />`;
 }
 
 function CameraPanel({ title, info, square, label, children }) {

@@ -13,7 +13,7 @@ Python services that run on the Pi's non-real-time cores and talk over Zenoh.
 
 ```sh
 python3 -m venv svc/.venv
-svc/.venv/bin/pip install -e 'svc[dev,dslr]'        # dslr: python-gphoto2 for the D500
+svc/.venv/bin/pip install -e 'svc[dev,dslr,zwo]'    # dslr: python-gphoto2 for the D500; zwo: zwoasi
 svc/.venv/bin/python -m pytest svc/tests        # the end-to-end test needs mount-rt built with Zenoh
 ```
 
@@ -31,6 +31,7 @@ svc/.venv/bin/mount-svc --system $SYS passes --tle iss.tle      # passes and pla
 svc/.venv/bin/mount-svc --system $SYS track-tle --tle iss.tle   # wait for the next pass and track it
 svc/.venv/bin/mount-svc --system $SYS adsb-sim                   # simulated ADS-B traffic at adsb.source (no receiver)
 svc/.venv/bin/mount-svc --system $SYS dslr                       # stills camera over USB (Nikon D500); --sim without one
+svc/.venv/bin/mount-svc --system $SYS zwo                        # ZWO camera (ASI SDK); --sim: a simulated ASI224MC
 svc/.venv/bin/mount-svc --system $SYS track-radec --ra 06:45:08.9 --dec -16:42:58 --minutes 10
 svc/.venv/bin/mount-svc --system $SYS goto --az 180 --el 45
 ```
@@ -90,3 +91,18 @@ over-the-top when its error is within `tracking.over_the_top_tolerance_deg`.
 TPOINT-style terms (IA, IE, CA, NPAE, AN, AW, TF, BE) are applied to the mechanical angles. The
 `pointing:` entry in the system file names a YAML file with `terms: {IA: 12.3, ...}` in
 arcseconds. Fitting comes with the camera service.
+
+## ZWO camera setup (Pi)
+
+`mount-svc zwo` uses ZWO's ASI SDK through the `zwoasi` package. The SDK is a binary library
+from ZWO (not redistributed here):
+
+1. Download the "ASI Camera SDK" for Linux from ZWO's developer downloads and copy
+   `lib/armv8/libASICamera2.so` to `/usr/local/lib/` (or set `cameras.zwo.sdk_lib`).
+2. Install its udev rules so the camera works without root:
+   `sudo install -m 644 lib/asi.rules /etc/udev/rules.d/ && sudo udevadm control --reload`,
+   then replug the camera.
+3. High frame rates need more USB buffer memory than Linux's default 16 MB: add
+   `usbcore.usbfs_memory_mb=200` to `/boot/firmware/cmdline.txt` and reboot.
+
+Without a camera, `mount-svc zwo --sim` simulates an ASI224MC.

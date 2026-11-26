@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Camera services (Zenoh keys maxmount/<site>/camera/<id>/...; id "dslr" for the Nikon D500):
+// Camera services (Zenoh keys maxmount/<site>/camera/<id>/...; id "dslr" for the Nikon D500,
+// "zwo" for the ZWO camera on the C8):
 //   camera/<id>/status   CameraStatus, about once a second and on every change
 //   camera/<id>/frame    CameraFrame: live view frames, and the preview of each capture
 //   camera/<id>/cmd      queryable: CameraCommand -> CameraReply
@@ -9,11 +10,17 @@ package maxmount.v1;
 
 // One camera setting with its current value and the values the camera offers.
 message CameraSetting {
-  string name = 1;              // iso | shutterspeed | imagequality | capturetarget
+  string name = 1;              // dslr: iso | shutterspeed | imagequality | capturetarget
+                                // zwo: exposure_ms | gain | offset | image_type | bin | roi | bandwidth
   string label = 2;
   string value = 3;
-  repeated string choices = 4;
+  repeated string choices = 4;  // empty for a numeric setting
   bool read_only = 5;
+  bool numeric = 6;             // a number within [min, max] in steps of step
+  double min = 7;
+  double max = 8;
+  double step = 9;
+  string unit = 10;
 }
 
 message CameraStatus {
@@ -34,6 +41,14 @@ message CameraStatus {
   bool simulated = 15;
   bool stretch = 16;            // previews are auto-stretched
   bool bulb_supported = 17;
+  // Video cameras (zwo).
+  double fps = 18;              // frames per second delivered by the camera (live view)
+  int64 dropped = 19;           // frames dropped by the camera or driver since video started
+  double temperature_c = 20;    // sensor temperature; NaN if unknown
+  repeated int32 roi = 21;      // x, y, width, height in binned pixels
+  int32 sensor_width = 22;
+  int32 sensor_height = 23;
+  repeated string storage = 24; // where captures can go: card, pi, both
 }
 
 message SetCameraSetting {
@@ -79,4 +94,6 @@ message CameraFrame {
   double exposure_s = 13;
   string iso = 14;
   string shutter = 15;
+  double gain = 16;             // zwo
+  int32 bit_depth = 17;         // of the saved data
 }

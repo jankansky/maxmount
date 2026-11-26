@@ -113,7 +113,11 @@ it, **Drives** (`#drives`).
     quality, where to save (camera card, Pi, or both), auto-stretch, Capture (Abort during a
     bulb exposure), and the last capture with its histogram, median, 99th percentile,
     saturated fraction and file names. In the red theme camera images are shown in red only;
-  - ZWO (`zwo`): placeholder until its camera service exists;
+  - ZWO (`zwo`, served by `mount-svc zwo`): video with the camera's frame rate, dropped
+    frames and sensor temperature; exposure, gain and offset (type a value, Enter), format
+    (RAW8, RAW16, RGB24), binning, a centred ROI, USB bandwidth, auto-stretch; Capture frame
+    saves the next frame at full bit depth as FITS on the Pi; histogram and statistics as for
+    the D500;
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets.
 - **Right column:**

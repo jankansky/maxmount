@@ -383,3 +383,55 @@ def test_dslr_panel(gui_url, served, tmp_path, engine):  # noqa: F811
         svc.close()
         cam_client.close()
     assert not errors, errors
+
+
+@pytest.mark.parametrize("engine", ["chromium", "firefox"])
+def test_zwo_panel(gui_url, served, tmp_path, engine):  # noqa: F811
+    """The C8 panel with the ZWO profile (the sim system's default) and the simulated ASI224MC:
+    video, a numeric setting typed in, capture to FITS; the image stays inside its box."""
+    from maxmount_svc import zwo
+    from maxmount_svc.camera import CameraService
+    from maxmount_svc.mount import MountClient
+
+    _client, settings = served
+    cam_client = MountClient(settings.zenoh)
+    svc = CameraService(cam_client, zwo.ZwoSimBackend(), "zwo", tmp_path, liveview_fps=10)
+    svc.start()
+    errors = []
+    try:
+        with playwright.sync_playwright() as pw:
+            try:
+                browser = getattr(pw, engine).launch()
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"no {engine} for Playwright: {e}")
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+            page.goto(gui_url)
+            panel = page.locator("[aria-label='C8 camera']")
+            panel.get_by_role("button", name="Video").wait_for(timeout=15000)
+            page.wait_for_function("() => !document.querySelector(\"[aria-label='C8 camera'] button\").disabled", timeout=15000)
+            panel.get_by_role("button", name="Video").click()
+            panel.locator("img[alt='live view']").wait_for(timeout=10000)
+            assert "LIVE · 640×480" in panel.locator(".tag").text_content()
+            page.wait_for_function("() => /\\d+\\.\\d fps/.test(document.querySelector(\"[aria-label='C8 camera'] .head\").textContent)", timeout=10000)
+            box, img = panel.locator(".camview").bounding_box(), panel.locator(".camview img").bounding_box()
+            assert img["width"] <= box["width"] + 1 and img["height"] <= box["height"] + 1
+            gain = panel.get_by_label("Gain")
+            gain.fill("300")
+            gain.press("Enter")
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] input[aria-label=Gain]\").value === '300'", timeout=10000)
+            page.wait_for_timeout(1500)  # redraws must not overwrite the field
+            assert gain.input_value() == "300"
+            panel.get_by_label("ROI").select_option("320x240")
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] .tag\")?.textContent.includes('320×240')", timeout=10000)
+            panel.get_by_role("button", name="Capture frame").click()
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] .dslr-info\").textContent.includes('.fits')", timeout=15000)
+            panel.get_by_role("button", name="Video on").click()
+            panel.locator("img[alt='last frame']").wait_for(timeout=10000)
+            assert "gain 300" in panel.locator(".tag").text_content()
+            browser.close()
+    finally:
+        svc.close()
+        cam_client.close()
+    assert not errors, errors

@@ -256,7 +256,8 @@ class Gateway:
         msg = {"type": "camframe", "camera_id": f.camera_id, "kind": f.kind, "t_ns": str(f.t_ns), "width": f.width,
                "height": f.height, "stretched": f.stretched, "histogram": list(f.histogram), "median": f.median,
                "p99": f.p99, "saturated_frac": f.saturated_frac, "files": list(f.files), "exposure_s": f.exposure_s,
-               "iso": f.iso, "shutter": f.shutter, "jpeg": base64.b64encode(f.jpeg).decode("ascii")}
+               "iso": f.iso, "shutter": f.shutter, "gain": f.gain, "bit_depth": f.bit_depth,
+               "jpeg": base64.b64encode(f.jpeg).decode("ascii")}
         if f.kind == "capture":
             self._last_capture[f.camera_id] = msg
         self._broadcast(msg)

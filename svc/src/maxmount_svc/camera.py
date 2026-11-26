@@ -54,27 +54,40 @@ def _pil():
 
 
 def frame_from_jpeg(jpeg: bytes, kind: str, stretch: bool, max_px: int = 1600) -> mpb.CameraFrame:
-    """Statistics of a JPEG (8-bit luminance), and a preview: downscaled to max_px and, if
-    stretch, an asinh stretch between the 0.5th percentile and the 99.9th."""
+    """A frame from a camera's JPEG: downscaled to max_px on decode, then frame_from_array."""
     Image = _pil()
     im = Image.open(io.BytesIO(jpeg))
     im.draft("RGB", (max_px, max_px))  # fast JPEG downscale on decode
     im = im.convert("RGB")
     if max(im.size) > max_px:
         im.thumbnail((max_px, max_px))
-    lum = np.asarray(im.convert("L"), dtype=np.uint8)
-    hist = np.bincount(lum.ravel() >> 2, minlength=64)
-    f = mpb.CameraFrame(t_ns=time.time_ns(), kind=kind, width=im.size[0], height=im.size[1], stretched=stretch,
-                        median=float(np.median(lum)), p99=float(np.percentile(lum, 99)),
-                        saturated_frac=float(np.mean(lum >= 250)))
+    return frame_from_array(np.asarray(im), kind, stretch)
+
+
+def frame_from_array(a: np.ndarray, kind: str, stretch: bool, max_px: int = 1600, full_scale: float | None = None) -> mpb.CameraFrame:
+    """Statistics and a JPEG preview of an image (H x W mono or H x W x 3 RGB; 8 or 16 bit).
+    Statistics are on luminance scaled to 0-255 (histogram: 64 bins); saturated = within 2 %
+    of full scale (255 or 65535 unless given). Stretch: asinh between the 0.5th and 99.9th
+    percentiles."""
+    Image = _pil()
+    full = full_scale or (65535.0 if a.dtype == np.uint16 else 255.0)
+    if max(a.shape[:2]) > max_px:  # decimate large frames (cheap and good enough for a preview)
+        k = int(math.ceil(max(a.shape[:2]) / max_px))
+        a = a[::k, ::k]
+    lum = a.mean(axis=-1) if a.ndim == 3 else a
+    lum8 = np.clip(lum.astype(np.float32) * (255.0 / full), 0, 255)
+    hist = np.bincount(lum8.astype(np.uint8).ravel() >> 2, minlength=64)
+    f = mpb.CameraFrame(t_ns=time.time_ns(), kind=kind, width=a.shape[1], height=a.shape[0], stretched=stretch,
+                        median=float(np.median(lum8)), p99=float(np.percentile(lum8, 99)),
+                        saturated_frac=float(np.mean(lum >= 0.98 * full)))
     f.histogram.extend(int(x) for x in hist)
+    x = a.astype(np.float32) * (255.0 / full)
     if stretch:
-        a = np.asarray(im, dtype=np.float32)
-        lo, hi = np.percentile(a, 0.5), max(np.percentile(a, 99.9), np.percentile(a, 0.5) + 1)
-        x = np.clip((a - lo) / (hi - lo), 0, 1)
+        lo, hi = np.percentile(x, 0.5), np.percentile(x, 99.9)
+        x = np.clip((x - lo) / max(hi - lo, 1e-3), 0, 1)
         k = 8.0
-        a = np.arcsinh(k * x) / math.asinh(k) * 255
-        im = Image.fromarray(a.astype(np.uint8))
+        x = np.arcsinh(k * x) / math.asinh(k) * 255
+    im = Image.fromarray(np.clip(x, 0, 255).astype(np.uint8))
     out = io.BytesIO()
     im.save(out, "JPEG", quality=85)
     f.jpeg = out.getvalue()
@@ -87,6 +100,11 @@ class Shot:
     files: list[tuple[str, bytes | None]] = field(default_factory=list)  # (name, data or None if left on the card)
     preview_jpeg: bytes | None = None
     card_paths: list[str] = field(default_factory=list)
+    preview_array: np.ndarray | None = None  # video cameras: the frame itself
+    full_scale: float | None = None
+    gain: float = 0.0
+    bit_depth: int = 0
+    note: str = ""
 
 
 class SimBackend:
@@ -115,13 +133,13 @@ class SimBackend:
     def battery(self) -> int:
         return 87
 
-    def settings(self) -> list[tuple[str, str, list[str], bool]]:
+    def settings(self) -> list[dict]:
         ch = {"iso": self.ISOS, "shutterspeed": self.SHUTTERS, "imagequality": self.QUALITY,
               "capturetarget": ["Internal RAM", "Memory card"]}
-        return [(n, self.values[n], ch[n], False) for n in (*SETTINGS, "capturetarget")]
+        return [{"name": n, "value": self.values[n], "choices": ch[n]} for n in (*SETTINGS, "capturetarget")]
 
     def set(self, name: str, value: str) -> None:
-        choices = dict((n, c) for n, _v, c, _ro in self.settings())
+        choices = {d["name"]: d["choices"] for d in self.settings()}
         if name not in choices or value not in choices[name]:
             raise CameraError(f"{name}: '{value}' not offered")
         self.values[name] = value
@@ -256,7 +274,7 @@ class GphotoBackend:
                 choices = [wd.get_choice(i) for i in range(wd.count_choices())]
             except self.gp.GPhoto2Error:
                 choices = []
-            out.append((key, str(wd.get_value()), choices, bool(wd.get_readonly())))
+            out.append({"name": key, "value": str(wd.get_value()), "choices": choices, "read_only": bool(wd.get_readonly())})
         return out
 
     def set(self, name: str, value: str) -> None:
@@ -306,7 +324,7 @@ class GphotoBackend:
         if bulb_s > 0:
             if not self.bulb_supported:
                 raise CameraError("this camera does not offer bulb control over USB")
-            shutters = dict((n, c) for n, _v, c, _r in self.settings()).get("shutterspeed", [])
+            shutters = {d["name"]: d["choices"] for d in self.settings()}.get("shutterspeed", [])
             bulb = next((c for c in shutters if "bulb" in c.lower()), None)
             if bulb:
                 self.set("shutterspeed", bulb)
@@ -318,7 +336,7 @@ class GphotoBackend:
             first = self.cam.capture(gp.GP_CAPTURE_IMAGE)
             paths = self._collect(first, 5)
         shot = Shot()
-        to_card = "card" in dict((n, v) for n, v, _c, _r in self.settings()).get("capturetarget", "").lower()
+        to_card = "card" in {d["name"]: d["value"] for d in self.settings()}.get("capturetarget", "").lower()
         for p in paths:
             name = p.name
             is_jpeg = name.lower().endswith((".jpg", ".jpeg"))
@@ -354,6 +372,8 @@ class CameraService:
         self.id = camera_id
         self.data_dir = Path(data_dir).expanduser() / camera_id
         self.liveview_fps = liveview_fps
+        # Where captures can go: a DSLR has a card; a video camera saves on the Pi only.
+        self.storage = tuple(getattr(backend, "storage", ("card", "pi", "both")))
         self._q: queue.Queue = queue.Queue()
         self._abort = threading.Event()
         self._closing = threading.Event()
@@ -369,7 +389,7 @@ class CameraService:
         self._captures = 0
         self._exposure_s = 0.0
         self._exposure_end = 0
-        self._save_to = "card"
+        self._save_to = self.storage[0]
         self._stretch = True
         self._svc_status = None
         self._threads: list[threading.Thread] = []
@@ -425,8 +445,8 @@ class CameraService:
             self._abort.set()
             return True, "abort requested"
         if which == "save_to":
-            if cmd.save_to not in ("card", "pi", "both"):
-                return False, f"save_to must be card, pi or both, not '{cmd.save_to}'"
+            if cmd.save_to not in self.storage:
+                return False, f"save_to must be {' or '.join(self.storage)}, not '{cmd.save_to}'"
             with self._lock:
                 self._save_to = cmd.save_to
         elif which == "stretch":
@@ -468,9 +488,9 @@ class CameraService:
         with self._lock:
             save_to = self._save_to
         want = "card" if save_to in ("card", "both") else "ram"
-        cur = dict((n, (v, c)) for n, v, c, _r in self._settings).get("capturetarget")
-        if cur and want not in cur[0].lower():
-            target = next((c for c in cur[1] if want in c.lower()), None)
+        cur = next((d for d in self._settings if d["name"] == "capturetarget"), None)
+        if cur and want not in cur["value"].lower():
+            target = next((c for c in cur["choices"] if want in c.lower()), None)
             if target:
                 self.backend.set("capturetarget", target)
 
@@ -497,7 +517,7 @@ class CameraService:
                 if item:
                     self._run(*item)
                 elif self._liveview:
-                    self._publish_frame(frame_from_jpeg(self.backend.preview(), "liveview", self._stretch, 1024))
+                    self._publish_frame(self._liveview_frame())
                 else:
                     self._refresh()
             except CameraError as e:
@@ -521,7 +541,9 @@ class CameraService:
                 self._refresh()
                 result.update(ok=True, message=f"saving to {self._save_to}")
             elif which == "liveview":
-                if not arg and self._liveview and hasattr(self.backend, "end_liveview"):
+                if hasattr(self.backend, "set_liveview"):
+                    self.backend.set_liveview(bool(arg))  # a video camera starts or stops streaming
+                elif not arg and self._liveview and hasattr(self.backend, "end_liveview"):
                     self.backend.end_liveview()
                 self._set(liveview=bool(arg), state="liveview" if arg else "idle")
                 result.update(ok=True, message=f"live view {'on' if arg else 'off'}")
@@ -536,8 +558,9 @@ class CameraService:
 
     def _capture(self, bulb_s: float) -> None:
         self._apply_save_to()
-        values = dict((n, v) for n, v, _c, _r in self._settings)
-        exposure = bulb_s if bulb_s > 0 else eval_shutter(values.get("shutterspeed", ""))
+        values = {d["name"]: d["value"] for d in self._settings}
+        exposure = bulb_s if bulb_s > 0 else (self.backend.exposure_s() if hasattr(self.backend, "exposure_s")
+                                               else eval_shutter(values.get("shutterspeed", "")))
         was_live = self._liveview
         if was_live and hasattr(self.backend, "end_liveview"):
             self.backend.end_liveview()
@@ -577,15 +600,29 @@ class CameraService:
             self._captures += 1
             n = self._captures
             stretch = self._stretch
-        if shot.preview_jpeg:
-            f = frame_from_jpeg(shot.preview_jpeg, "capture", stretch)
+        if shot.preview_array is not None or shot.preview_jpeg:
+            f = (frame_from_array(shot.preview_array, "capture", stretch, full_scale=shot.full_scale)
+                 if shot.preview_array is not None else frame_from_jpeg(shot.preview_jpeg, "capture", stretch))
+            f.gain, f.bit_depth = shot.gain, shot.bit_depth
             f.files.extend(files)
             f.exposure_s, f.iso, f.shutter = exposure, values.get("iso", ""), values.get("shutterspeed", "")
             self._publish_frame(f)
         self._refresh()
-        where = {"card": "on the card", "pi": f"in {self.data_dir}", "both": f"on the card and in {self.data_dir}"}[save_to]
+        where = {"card": "on the card", "pi": "on the Pi", "both": "on the card and the Pi"}[save_to]
+        if shot.note:
+            where += f" ({shot.note})"
         self._set(state="liveview" if was_live else "idle", exposure_s=0.0, exposure_end=0,
                   message=f"capture {n}: {len(shot.files)} file(s) {where}")
+
+    def _liveview_frame(self):
+        """The backend's latest live frame: a JPEG (DSLR live view) or an array (video camera)."""
+        with self._lock:
+            stretch = self._stretch
+        a = getattr(self.backend, "preview_array", None)
+        if a is not None:
+            img, full = a()
+            return frame_from_array(img, "liveview", stretch, 1024, full_scale=full)
+        return frame_from_jpeg(self.backend.preview(), "liveview", stretch, 1024)
 
     # -- publishing ----------------------------------------------------------------------------
     def status(self) -> mpb.CameraStatus:
@@ -597,8 +634,22 @@ class CameraService:
                 data_dir=str(self.data_dir), simulated=bool(getattr(self.backend, "simulated", False)),
                 stretch=self._stretch, bulb_supported=bool(getattr(self.backend, "bulb_supported", False)),
             )
-            for name, value, choices, ro in self._settings:
-                st.settings.add(name=name, label=LABELS.get(name, name), value=value, choices=choices, read_only=ro)
+            for d in self._settings:
+                st.settings.add(name=d["name"], label=d.get("label") or LABELS.get(d["name"], d["name"]), value=str(d["value"]),
+                                choices=d.get("choices") or [], read_only=bool(d.get("read_only")), numeric=bool(d.get("numeric")),
+                                min=float(d.get("min", 0)), max=float(d.get("max", 0)), step=float(d.get("step", 0)),
+                                unit=str(d.get("unit", "")))
+            st.storage.extend(self.storage)
+        extra = getattr(self.backend, "extra_status", None)
+        if extra:
+            try:
+                x = extra()
+                st.fps, st.dropped = float(x.get("fps", 0)), int(x.get("dropped", 0))
+                st.temperature_c = float(x.get("temperature_c", float("nan")))
+                st.roi.extend(int(v) for v in x.get("roi", []))
+                st.sensor_width, st.sensor_height = int(x.get("sensor_width", 0)), int(x.get("sensor_height", 0))
+            except Exception:  # noqa: BLE001 - status must not fail
+                pass
         return st
 
     def _publish_status(self) -> None:

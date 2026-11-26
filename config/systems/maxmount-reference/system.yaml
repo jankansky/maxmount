@@ -114,6 +114,14 @@ cameras:
     data_dir: ~/maxmount-data # captures saved on the Pi go to <data_dir>/dslr/<date>/
     liveview_fps: 8
     save_to: card             # card | pi | both; changeable in the GUI
+  # zwo: the ZWO camera on the C8 (`mount-svc zwo`), through ZWO's ASI SDK. Download the
+  # "ASI Camera SDK" for Linux from ZWO's developer page, copy lib/armv8/libASICamera2.so here,
+  # and install its udev rules (lib/asi.rules) so the camera is usable without root.
+  zwo:
+    backend: sdk              # or sim: a simulated ASI224MC
+    sdk_lib: /usr/local/lib/libASICamera2.so
+    data_dir: ~/maxmount-data # frames (FITS) go to <data_dir>/zwo/<date>/
+    liveview_fps: 8           # previews to the GUI; the camera itself streams faster
 
 # ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
 # 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.

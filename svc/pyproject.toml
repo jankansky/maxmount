@@ -24,6 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 dslr = ["gphoto2>=2.5"]           # Nikon D500 and other cameras over USB (bundles libgphoto2)
+zwo = ["zwoasi>=0.2"]             # ZWO ASI cameras (needs ZWO's ASI SDK library, see the system file)
 gui-test = ["playwright>=1.40"]  # browser smoke test; also run: playwright install chromium
 
 [project.scripts]

@@ -315,8 +315,7 @@ def cmd_adsb_sim(args, sys_: SystemSettings) -> int:
 
 
 def cmd_dslr(args, sys_: SystemSettings) -> int:
-    from .camera import CameraError, CameraService, GphotoBackend, SimBackend
-    from .mount import MountClient
+    from .camera import CameraError, GphotoBackend, SimBackend
 
     cfg = sys_.dslr
     try:
@@ -324,14 +323,36 @@ def cmd_dslr(args, sys_: SystemSettings) -> int:
     except CameraError as e:
         print(f"mount-svc: {e}", file=sys.stderr)
         return 1
+    return _serve_camera(sys_, backend, "dslr", cfg.data_dir, cfg.liveview_fps,
+                         cfg.save_to if cfg.save_to in ("card", "pi", "both") else "card")
+
+
+def cmd_zwo(args, sys_: SystemSettings) -> int:
+    from .camera import CameraError
+    from .zwo import ZwoSdkBackend, ZwoSimBackend
+
+    cfg = sys_.zwo
+    try:
+        backend = ZwoSimBackend() if (args.sim or cfg.backend == "sim") else ZwoSdkBackend(cfg.sdk_lib)
+    except CameraError as e:
+        print(f"mount-svc: {e}", file=sys.stderr)
+        return 1
+    return _serve_camera(sys_, backend, "zwo", cfg.data_dir, cfg.liveview_fps, "pi")
+
+
+def _serve_camera(sys_: SystemSettings, backend, camera_id: str, data_dir: str, fps: float, save_to: str) -> int:
+    from .camera import CameraService
+    from .mount import MountClient
+
     stop = []
     signal.signal(signal.SIGINT, lambda *_: stop.append(1))
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
     with MountClient(sys_.zenoh) as client:
-        svc = CameraService(client, backend, "dslr", cfg.data_dir, cfg.liveview_fps)
-        svc._save_to = cfg.save_to if cfg.save_to in ("card", "pi", "both") else "card"
+        svc = CameraService(client, backend, camera_id, data_dir, fps)
+        if save_to in svc.storage:
+            svc._save_to = save_to
         svc.start()
-        print(f"camera service on {svc.key('*')} ({'simulated' if backend.simulated else 'libgphoto2'}); Ctrl-C to stop")
+        print(f"camera service on {svc.key('*')} ({'simulated' if backend.simulated else camera_id}); Ctrl-C to stop")
         while not stop:
             time.sleep(0.2)
         svc.close()
@@ -394,6 +415,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("dslr", help="serve a stills camera over USB (Nikon D500, libgphoto2) for the GUI")
     p.add_argument("--sim", action="store_true", help="a simulated camera (synthetic star field)")
     p.set_defaults(func=cmd_dslr)
+
+    p = sub.add_parser("zwo", help="serve the ZWO camera (ASI SDK) for the GUI: video, ROI, FITS frames")
+    p.add_argument("--sim", action="store_true", help="a simulated ASI224MC (star field and a moving target)")
+    p.set_defaults(func=cmd_zwo)
 
     p = sub.add_parser("request", help="send a request to a running 'mount-svc serve'")
     rs = p.add_subparsers(dest="what", required=True)

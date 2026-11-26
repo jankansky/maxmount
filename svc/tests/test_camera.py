@@ -43,7 +43,7 @@ def test_frame_stats_and_stretch():
 def test_sim_backend():
     b = camera.SimBackend(time_scale=0.001)
     assert "simulated" in b.open() and b.battery() == 87
-    names = [n for n, *_ in b.settings()]
+    names = [d["name"] for d in b.settings()]
     assert names == ["iso", "shutterspeed", "imagequality", "capturetarget"]
     with pytest.raises(camera.CameraError):
         b.set("iso", "123")
@@ -76,8 +76,8 @@ class Watch:
         raise AssertionError(f"no message matched; last: {self.items[-1] if self.items else None}")
 
 
-def cmd(gui, **kw):
-    out = gui.query("camera/dslr/cmd", mpb.CameraCommand(**kw).SerializeToString(), timeout=20)
+def cmd(gui, camera_id="dslr", **kw):
+    out = gui.query(f"camera/{camera_id}/cmd", mpb.CameraCommand(**kw).SerializeToString(), timeout=20)
     assert out is not None, "no reply from the camera service"
     r = mpb.CameraReply()
     r.ParseFromString(out)
