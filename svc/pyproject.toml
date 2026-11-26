@@ -18,10 +18,12 @@ dependencies = [
     "protobuf>=5.26",
     "grpcio-tools>=1.62",     # bundled protoc: generates maxmount.v1 code matching the runtime
     "aiohttp>=3.9",           # GUI gateway (HTTP + WebSocket)
+    "pillow>=10",             # camera previews (JPEG decode, stretch, statistics)
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+dslr = ["gphoto2>=2.5"]           # Nikon D500 and other cameras over USB (bundles libgphoto2)
 gui-test = ["playwright>=1.40"]  # browser smoke test; also run: playwright install chromium
 
 [project.scripts]

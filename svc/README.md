@@ -13,7 +13,7 @@ Python services that run on the Pi's non-real-time cores and talk over Zenoh.
 
 ```sh
 python3 -m venv svc/.venv
-svc/.venv/bin/pip install -e 'svc[dev]'
+svc/.venv/bin/pip install -e 'svc[dev,dslr]'        # dslr: python-gphoto2 for the D500
 svc/.venv/bin/python -m pytest svc/tests        # the end-to-end test needs mount-rt built with Zenoh
 ```
 
@@ -30,6 +30,7 @@ build/rt/mount-rt --system $SYS --serve &                       # simulated moun
 svc/.venv/bin/mount-svc --system $SYS passes --tle iss.tle      # passes and plans, no mount needed
 svc/.venv/bin/mount-svc --system $SYS track-tle --tle iss.tle   # wait for the next pass and track it
 svc/.venv/bin/mount-svc --system $SYS adsb-sim                   # simulated ADS-B traffic at adsb.source (no receiver)
+svc/.venv/bin/mount-svc --system $SYS dslr                       # stills camera over USB (Nikon D500); --sim without one
 svc/.venv/bin/mount-svc --system $SYS track-radec --ra 06:45:08.9 --dec -16:42:58 --minutes 10
 svc/.venv/bin/mount-svc --system $SYS goto --az 180 --el 45
 ```

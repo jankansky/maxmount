@@ -12,6 +12,12 @@
 </script>
 </head>
 <body>
+<!-- Red theme: camera images keep their brightness in the red channel only (dark adaptation). -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="red-only" color-interpolation-filters="sRGB">
+    <feColorMatrix type="matrix" values="0.21 0.72 0.07 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" />
+  </filter>
+</svg>
 <div id="app"></div>
 <script type="module" src="app.js"></script>
 </body>

@@ -412,3 +412,14 @@ export function drawMap(canvas, { land = null, track = null, now = new Date(), a
     ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5, sy + 4); ctx.lineTo(sx - 5, sy + 4); ctx.closePath(); ctx.fill();
   }
 }
+
+// Histogram (64 bins, 8-bit luminance), log counts.
+export function drawHist(canvas, hist) {
+  const { ctx, w, h } = setup(canvas, 0.25);
+  ctx.fillStyle = cssVar('--img'); ctx.fillRect(0, 0, w, h);
+  if (!hist.length) return;
+  const max = Math.log10(Math.max(...hist) + 1) || 1;
+  const bw = w / hist.length;
+  ctx.fillStyle = cssVar('--accent');
+  hist.forEach((n, i) => { const bh = (Math.log10(n + 1) / max) * (h - 2); ctx.fillRect(i * bw, h - bh, Math.max(1, bw - 1), bh); });
+}

@@ -3,7 +3,7 @@
 import { html, render, useState, useEffect, useRef, useCallback, useMemo } from './vendor/preact-htm-standalone.module.js';
 import { Select } from './lib/ui.js';
 import { connect } from './lib/ws.js';
-import { drawStrip, drawSky, drawMap, cssVar } from './lib/charts.js';
+import { drawStrip, drawSky, drawMap, drawHist, cssVar } from './lib/charts.js';
 import { pad, dms, hms, utc, dur, loadPref, savePref } from './lib/util.js';
 import { DrivesScreen } from './drives.js';
 
@@ -193,6 +193,69 @@ function TargetDialog({ dialogRef, send }) {
       </div>
     </form>
   </dialog>`;
+}
+
+// Nikon D500 (or another stills camera) served by `mount-svc dslr`: live view, settings,
+// capture, and the last capture with its histogram. cam: the camera's status message;
+// frames: { live, capture } latest frames.
+function DslrPanel({ cam, frames, send, now }) {
+  const [zoom, setZoom] = useState(false);
+  const [bulb, setBulb] = useState(loadPref('dslr_bulb', 30));
+  const histRef = useRef(null);
+  const live = cam?.liveview && frames?.live;
+  const shown = live ? frames.live : frames?.capture;
+  useEffect(() => { if (histRef.current) drawHist(histRef.current, shown?.histogram || []); });
+  const cmd = (args) => send('camera', { camera_id: cam?.camera_id || 'dslr', ...args });
+  if (!cam) {
+    return html`<section class="panel camera wide" aria-label="Stills camera">
+      <div class="head"><h2>Stills camera</h2></div>
+      <div class="camview"><span>Camera service not running. Start it on the Pi with
+        <code>mount-svc --system $SYS dslr</code> (add <code>--sim</code> to try it without a camera).</span></div>
+    </section>`;
+  }
+  const setting = (n) => (cam.settings || []).find((x) => x.name === n);
+  const shutter = setting('shutterspeed');
+  const isBulb = shutter && /bulb/i.test(shutter.value);
+  const busy = cam.state === 'exposing' || cam.state === 'downloading';
+  const left = cam.exposure_end_ns ? Math.max(0, (Number(cam.exposure_end_ns) / 1e6 - now) / 1000) : 0;
+  const pick = (n) => {
+    const st = setting(n);
+    if (!st) return null;
+    return html`<label>${st.label} <${Select} aria-label=${st.label} value=${st.value} disabled=${st.read_only || busy || !cam.connected}
+      options=${(st.choices.length ? st.choices : [st.value]).map((c) => [c, c])} onChange=${(v) => cmd({ set: { name: n, value: v } })} /></label>`;
+  };
+  const capture = () => {
+    savePref('dslr_bulb', bulb);
+    cmd({ capture: { bulb_s: isBulb ? Number(bulb) : 0 } });
+  };
+  return html`<section class="panel camera wide dslr" aria-label="Stills camera">
+    <div class="head"><h2>${cam.model || 'Stills camera'}</h2>
+      <span class="small mono">${cam.connected ? `${cam.state}${cam.battery_percent >= 0 ? ` · battery ${cam.battery_percent}%` : ''}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
+    <div class=${'camview img' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre (focus)" onClick=${() => setZoom(!zoom)}>
+      ${shown ? html`<img alt=${live ? 'live view' : 'last capture'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
+        : html`<span>${cam.connected ? 'Turn on live view, or capture a frame.' : cam.message}</span>`}
+      ${shown && html`<span class="tag">${live ? 'LIVE' : `last capture${shown.exposure_s ? ` · ${shown.exposure_s} s` : ''}${shown.iso ? ` · ISO ${shown.iso}` : ''}`}${zoom ? ' · 3×' : ''}</span>`}
+    </div>
+    <div class="toolbar">
+      <button class=${'btn' + (cam.liveview ? ' on' : '')} aria-pressed=${!!cam.liveview} disabled=${!cam.connected || busy}
+        onClick=${() => cmd({ liveview: !cam.liveview })}>${cam.liveview ? 'Live view on' : 'Live view'}</button>
+      ${pick('iso')}${pick('shutterspeed')}
+      ${isBulb && html`<label>Bulb <input type="number" min="1" max="3600" step="1" style="width:70px" value=${bulb}
+        aria-label="Bulb seconds" onInput=${(e) => setBulb(e.target.value)} /> s</label>`}
+      ${pick('imagequality')}
+      <label>Save to <${Select} aria-label="Save to" value=${cam.save_to || 'card'} disabled=${busy}
+        options=${[['card', 'camera card'], ['pi', 'Pi'], ['both', 'card + Pi']]} onChange=${(v) => cmd({ save_to: v })} /></label>
+      <label class="check"><input type="checkbox" checked=${!!cam.stretch} onChange=${(e) => cmd({ stretch: e.target.checked })} /> Stretch</label>
+      ${busy ? html`<button class="btn" onClick=${() => cmd({ abort: true })} disabled=${!(cam.state === 'exposing' && isBulb)}>
+          ${cam.state === 'exposing' ? `Exposing… ${left.toFixed(0)} s` : 'Downloading…'}</button>`
+        : html`<button class="btn primary" disabled=${!cam.connected || (isBulb && !cam.bulb_supported)} onClick=${capture}>Capture</button>`}
+    </div>
+    <div class="dslr-info">
+      <canvas ref=${histRef} class="hist" role="img" aria-label="Histogram"></canvas>
+      <span class="small mono">${shown ? `median ${Math.round(shown.median)} · 99% ${Math.round(shown.p99)} · saturated ${(shown.saturated_frac * 100).toFixed(2)}%` : ''}
+        <br />${cam.message}${frames?.capture?.files?.length ? html`<br /><span class="muted">${frames.capture.files.join(', ')}</span>` : ''}</span>
+    </div>
+  </section>`;
 }
 
 function CameraPanel({ title, info, square }) {
@@ -852,6 +915,8 @@ function App() {
       onClose: () => { setConnected(false); setLine('gateway connection lost; reconnecting…'); },
       onMessage: (m) => {
         if (m.type === 'hello') { setHello(m); setImaging(m.imaging || null); } else if (m.type === 'imaging') setImaging(m);
+        else if (m.type === 'camera') setCameras((c) => ({ ...c, [m.camera_id]: m }));
+        else if (m.type === 'camframe') setCamFrames((c) => ({ ...c, [m.camera_id]: { ...c[m.camera_id], [m.kind === 'capture' ? 'capture' : 'live']: m } }));
         else if (m.type === 'telemetry') {
           setTel(m);
           const t = Number(m.t_ns) / 1e9;
@@ -901,6 +966,8 @@ function App() {
   const [listTab, setListTabState] = useState(loadPref('listtab', 'passes'));
   const [airView, setAirView] = useState(null);
   const [imaging, setImaging] = useState(null);
+  const [cameras, setCameras] = useState({});
+  const [camFrames, setCamFrames] = useState({});
   const ask = useCallback((op, args) => link.current.request(op, args), []);
   const setListTab = (t) => { setListTabState(t); savePref('listtab', t); setPreviewState(null); previewReq.current = null; };
   const updatePreviewRow = useCallback((row) => setPreviewState((pv) => (pv && pv.key === passKey(row) ? { ...pv, row } : pv)), []);
@@ -937,7 +1004,7 @@ function App() {
       </aside>
       <main class="col-main">
         <div class="row">
-          <${CameraPanel} title="Widefield · acquisition" info="GigE" />
+          <${DslrPanel} cam=${cameras.dslr} frames=${camFrames.dslr} send=${send} now=${now} />
           <${CameraPanel} title="C8 · ZWO" info="ROI" square=${true} />
         </div>
         <${Corrections} status=${status} send=${send} />

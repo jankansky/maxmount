@@ -59,6 +59,14 @@ class ZenohSettings:
 
 
 @dataclass
+class DslrSettings:
+    backend: str = "gphoto2"          # gphoto2 | sim
+    data_dir: str = "~/maxmount-data"  # captures go to <data_dir>/dslr/<date>/
+    liveview_fps: float = 8.0
+    save_to: str = "card"             # card | pi | both (the GUI can change it)
+
+
+@dataclass
 class AdsbSettings:
     # readsb/dump1090 aircraft.json: a path, or an http(s) URL on the local network
     # (e.g. tar1090's http://host/tar1090/data/aircraft.json).
@@ -161,6 +169,7 @@ class SystemSettings:
     fieldbus: dict = field(default_factory=dict)
     adsb: AdsbSettings = field(default_factory=AdsbSettings)
     imaging: ImagingSettings = field(default_factory=ImagingSettings)
+    dslr: DslrSettings = field(default_factory=DslrSettings)
 
 
 class ConfigError(RuntimeError):
@@ -278,6 +287,8 @@ def load_system(path: str | Path) -> SystemSettings:
         axes_info=_axes_info(doc, path.resolve().parent.parent.parent / "drives"),
         fieldbus=dict(doc.get("fieldbus") or {}),
         imaging=_imaging(doc),
+        dslr=DslrSettings(**{k: (float(v) if k == "liveview_fps" else str(v))
+                             for k, v in ((doc.get("cameras") or {}).get("dslr") or {}).items() if k in DslrSettings.__dataclass_fields__}),
         adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
                              for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),
     )

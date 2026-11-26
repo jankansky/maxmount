@@ -100,6 +100,14 @@ imaging:
       focal_mm: 2032
       note: "0.43\"/px, 40' x 26': satellite and lunar stills at high resolution"
 
+# Cameras. dslr: a stills camera over USB through libgphoto2 (`mount-svc dslr`; the Nikon D500).
+cameras:
+  dslr:
+    backend: gphoto2          # or sim: a synthetic star field, no camera needed
+    data_dir: ~/maxmount-data # captures saved on the Pi go to <data_dir>/dslr/<date>/
+    liveview_fps: 8
+    save_to: card             # card | pi | both; changeable in the GUI
+
 # ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
 # 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.
 adsb:

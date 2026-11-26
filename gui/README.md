@@ -105,7 +105,12 @@ it, **Drives** (`#drives`).
   - **Hold** and **Park**;
   - target card and the **Choose target…** dialog (RA/Dec or az/el).
 - **Centre:**
-  - widefield and narrow-field camera panels (placeholders until `camera-svc` exists);
+  - stills camera panel (Nikon D500 over USB, served by `mount-svc dslr`): live view (click
+    the image for a 3× centre zoom to focus), ISO, shutter speed or a bulb time, image
+    quality, where to save (camera card, Pi, or both), auto-stretch, Capture (Abort during a
+    bulb exposure), and the last capture with its histogram, median, 99th percentile,
+    saturated fraction and file names. In the red theme camera images are shown in red only;
+  - narrow-field ZWO panel (placeholder until its camera service exists);
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets.
 - **Right column:**

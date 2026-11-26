@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Camera services (Zenoh keys maxmount/<site>/camera/<id>/...; id "dslr" for the Nikon D500):
+//   camera/<id>/status   CameraStatus, about once a second and on every change
+//   camera/<id>/frame    CameraFrame: live view frames, and the preview of each capture
+//   camera/<id>/cmd      queryable: CameraCommand -> CameraReply
+syntax = "proto3";
+
+package maxmount.v1;
+
+// One camera setting with its current value and the values the camera offers.
+message CameraSetting {
+  string name = 1;              // iso | shutterspeed | imagequality | capturetarget
+  string label = 2;
+  string value = 3;
+  repeated string choices = 4;
+  bool read_only = 5;
+}
+
+message CameraStatus {
+  int64 t_ns = 1;
+  string camera_id = 2;
+  bool connected = 3;
+  string model = 4;
+  string state = 5;             // disconnected | idle | liveview | exposing | downloading | error
+  string message = 6;           // last event or error
+  int32 battery_percent = 7;    // -1 unknown
+  repeated CameraSetting settings = 8;
+  bool liveview = 9;
+  int32 captures = 10;          // since the service started
+  double exposure_s = 11;       // the exposure in progress
+  int64 exposure_end_ns = 12;
+  string save_to = 13;          // card | pi | both
+  string data_dir = 14;
+  bool simulated = 15;
+  bool stretch = 16;            // previews are auto-stretched
+  bool bulb_supported = 17;
+}
+
+message SetCameraSetting {
+  string name = 1;
+  string value = 2;
+}
+
+message Capture {
+  double bulb_s = 1;            // > 0: a bulb exposure timed by the service; 0: the camera's shutter speed
+}
+
+message CameraCommand {
+  oneof command {
+    SetCameraSetting set = 1;
+    Capture capture = 2;
+    bool liveview = 3;
+    string save_to = 4;         // card | pi | both
+    bool stretch = 5;
+    bool abort = 6;             // end a bulb exposure early
+  }
+}
+
+message CameraReply {
+  bool ok = 1;
+  string message = 2;
+}
+
+message CameraFrame {
+  int64 t_ns = 1;
+  string camera_id = 2;
+  string kind = 3;              // liveview | capture
+  bytes jpeg = 4;
+  int32 width = 5;
+  int32 height = 6;
+  bool stretched = 7;
+  // Statistics of the frame before stretching (8-bit luminance).
+  repeated uint32 histogram = 8;  // 64 bins
+  double median = 9;
+  double p99 = 10;
+  double saturated_frac = 11;
+  // Captures only.
+  repeated string files = 12;   // saved on the Pi, or "card:<folder>/<name>"
+  double exposure_s = 13;
+  string iso = 14;
+  string shutter = 15;
+}

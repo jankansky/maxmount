@@ -326,3 +326,48 @@ def test_aircraft_tab(gui_url, monkeypatch, served, tmp_path):  # noqa: F811
     finally:
         stop.set()
     assert not errors, errors
+
+
+def test_dslr_panel(gui_url, served, tmp_path):  # noqa: F811
+    """The Track screen's stills-camera panel with the simulated camera: live view, a setting,
+    capture, and the last capture with its histogram."""
+    from maxmount_svc import camera
+    from maxmount_svc.mount import MountClient
+
+    _client, settings = served
+    cam_client = MountClient(settings.zenoh)
+    svc = camera.CameraService(cam_client, camera.SimBackend(time_scale=0.01), "dslr", tmp_path, liveview_fps=10)
+    svc.start()
+    errors = []
+    try:
+        with playwright.sync_playwright() as pw:
+            try:
+                browser = pw.chromium.launch()
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"no Chromium for Playwright: {e}")
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+            page.goto(gui_url)
+            panel = page.locator("[aria-label='Stills camera']")
+            panel.get_by_role("button", name="Live view").wait_for(timeout=15000)
+            page.wait_for_function("() => !document.querySelector(\"[aria-label='Stills camera'] button\").disabled", timeout=15000)
+            panel.get_by_role("button", name="Live view").click()
+            panel.locator("img[alt='live view']").wait_for(timeout=10000)
+            assert "LIVE" in panel.locator(".tag").text_content()
+            panel.locator(".camview").click()  # zoom for focus
+            assert "3×" in panel.locator(".tag").text_content()
+            panel.locator(".camview").click()
+            panel.get_by_role("button", name="Live view on").click()
+            panel.get_by_label("ISO").select_option("400")
+            page.wait_for_function("() => document.querySelector(\"[aria-label='Stills camera'] select[aria-label=ISO]\").value === '400'", timeout=10000)
+            panel.get_by_role("button", name="Capture").click()
+            panel.locator("img[alt='last capture']").wait_for(timeout=15000)
+            assert "ISO 400" in panel.locator(".tag").text_content()
+            page.wait_for_function("() => document.querySelector(\"[aria-label='Stills camera'] .dslr-info\").textContent.includes('capture 1')", timeout=10000)
+            assert "median" in panel.locator(".dslr-info").text_content()
+            browser.close()
+    finally:
+        svc.close()
+        cam_client.close()
+    assert not errors, errors

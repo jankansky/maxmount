@@ -488,3 +488,50 @@ def test_imaging_profiles_switch_and_persist(stack, tmp_path, monkeypatch):
                 await gw.stop()
 
     asyncio.run(run())
+
+
+def test_camera_relay(stack, tmp_path):
+    """The gateway passes camera status and frames to the browser and camera commands back."""
+    from maxmount_svc import camera
+    from maxmount_svc.mount import MountClient
+
+    settings = stack
+    port = 18000 + __import__("random").randint(13001, 14500)
+    cam_client = MountClient(settings.zenoh)
+    svc = camera.CameraService(cam_client, camera.SimBackend(time_scale=0.01), "dslr", tmp_path, liveview_fps=10)
+    svc.start()
+
+    async def run():
+        gw = await _session(settings, port)
+        try:
+            async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                st = await _recv_until(ws, lambda m: m["type"] == "camera" and m["connected"])
+                assert st["camera_id"] == "dslr" and st["simulated"] and st["settings"]
+
+                async def req(i, args):
+                    await ws.send_str(json.dumps({"type": "request", "id": i, "op": "camera", "args": args}))
+                    return await _recv_until(ws, lambda m: m["type"] == "reply" and m["id"] == i)
+
+                assert (await req(1, {"liveview": True}))["ok"]
+                f = await _recv_until(ws, lambda m: m["type"] == "camframe" and m["kind"] == "liveview")
+                assert f["width"] == 640 and len(f["histogram"]) == 64
+                import base64
+                assert base64.b64decode(f["jpeg"])[:2] == b"\xff\xd8"
+                assert (await req(2, {"liveview": False}))["ok"]
+                assert (await req(3, {"capture": {"bulb_s": 0}}))["ok"]
+                f = await _recv_until(ws, lambda m: m["type"] == "camframe" and m["kind"] == "capture")
+                assert f["files"] and f["exposure_s"] == 2
+                r = await req(4, {"set": {"name": "iso", "value": "nope"}})
+                assert not r["ok"]
+                assert not (await req(5, {}))["ok"]
+            # A new client gets the last capture straight away.
+            async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                await _recv_until(ws, lambda m: m["type"] == "camframe" and m["kind"] == "capture")
+        finally:
+            await gw.stop()
+
+    try:
+        asyncio.run(run())
+    finally:
+        svc.close()
+        cam_client.close()

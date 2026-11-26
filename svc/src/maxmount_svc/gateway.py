@@ -20,6 +20,8 @@ WebSocket messages (JSON):
           conjunctions {hours, max_range_km, lighting, max_mag, coorbiting} (SOCRATES, visible from the site),
           aircraft {max_range_km, show, selected} (local ADS-B receiver: list, map, sky, the selected one's path),
           set_imaging {profile} (the active narrow-field imaging profile; broadcast as {"type": "imaging"}),
+          camera {camera_id, set {name, value} | capture {bulb_s} | liveview | save_to | stretch | abort}
+            (to camera/<id>/cmd; status arrives as {"type": "camera"}, frames as {"type": "camframe"}),
           conjunction_detail {cat1, cat2, primary, tca_ns} (both paths, separation, the pass to track),
           enable/disable {axis} and fault_reset (straight to mount-rt),
           jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
@@ -27,6 +29,7 @@ WebSocket messages (JSON):
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -56,6 +59,7 @@ TLE_GROUPS = ("stations", "visual", "active", "starlink", "weather", "science")
 TLE_MAX_AGE_S = 6 * 3600
 ALL_MAX = 400          # largest group searched with "all objects"
 PASS_ROWS_MAX = 300    # passes returned to the GUI
+LIVEVIEW_MAX_FPS = 8   # live view frames forwarded to browsers
 COORBIT_KM_S = 0.1     # conjunctions slower than this are formation flyers or co-located
 
 
@@ -208,6 +212,9 @@ class Gateway:
         self._track_msg = None
         self._subs = []
         self._runner: web.AppRunner | None = None
+        self._cameras: dict[str, dict] = {}       # latest {"type": "camera", ...} per camera id
+        self._last_capture: dict[str, dict] = {}  # latest capture frame per camera id
+        self._lv_sent: dict[str, float] = {}      # live view frames are sent at most LIVEVIEW_MAX_FPS
 
     # -- Zenoh side ----------------------------------------------------------------------------
     def _on_zenoh(self, kind: str, payload: bytes) -> None:
@@ -215,6 +222,16 @@ class Gateway:
             self.loop.call_soon_threadsafe(self._store, kind, payload)
 
     def _store(self, kind: str, payload: bytes) -> None:
+        if kind == "camstatus":
+            m = mpb.CameraStatus()
+            m.ParseFromString(payload)
+            msg = {"type": "camera", **_msg_to_dict(m)}
+            self._cameras[m.camera_id] = msg
+            self._broadcast(msg)
+            return
+        if kind == "camframe":
+            self._camera_frame(payload)
+            return
         if kind == "telemetry":
             m = mpb.MountTelemetry()
             m.ParseFromString(payload)
@@ -225,6 +242,48 @@ class Gateway:
             self._latest_status = m
             self._broadcast({"type": "status", **_msg_to_dict(m)})
             self._maybe_groundtrack(m)
+
+    def _camera_frame(self, payload: bytes) -> None:
+        """A camera frame to the browsers as {"type": "camframe", ..., "jpeg": base64}; live view
+        is thinned to LIVEVIEW_MAX_FPS (WiFi), captures always go through."""
+        f = mpb.CameraFrame()
+        f.ParseFromString(payload)
+        if f.kind == "liveview":
+            now = time.monotonic()
+            if now - self._lv_sent.get(f.camera_id, 0) < 1 / LIVEVIEW_MAX_FPS:
+                return
+            self._lv_sent[f.camera_id] = now
+        msg = {"type": "camframe", "camera_id": f.camera_id, "kind": f.kind, "t_ns": str(f.t_ns), "width": f.width,
+               "height": f.height, "stretched": f.stretched, "histogram": list(f.histogram), "median": f.median,
+               "p99": f.p99, "saturated_frac": f.saturated_frac, "files": list(f.files), "exposure_s": f.exposure_s,
+               "iso": f.iso, "shutter": f.shutter, "jpeg": base64.b64encode(f.jpeg).decode("ascii")}
+        if f.kind == "capture":
+            self._last_capture[f.camera_id] = msg
+        self._broadcast(msg)
+
+    def _camera_cmd(self, args: dict):
+        cam = str(args.get("camera_id") or "dslr")
+        cmd = mpb.CameraCommand()
+        if "set" in args:
+            cmd.set.name, cmd.set.value = str(args["set"]["name"]), str(args["set"]["value"])
+        elif "capture" in args:
+            cmd.capture.bulb_s = float((args["capture"] or {}).get("bulb_s", 0))
+        elif "liveview" in args:
+            cmd.liveview = bool(args["liveview"])
+        elif "save_to" in args:
+            cmd.save_to = str(args["save_to"])
+        elif "stretch" in args:
+            cmd.stretch = bool(args["stretch"])
+        elif "abort" in args:
+            cmd.abort = True
+        else:
+            return False, "empty camera command", None
+        out = self.client.query(f"camera/{cam}/cmd", cmd.SerializeToString(), timeout=20)
+        if out is None:
+            return False, f"no reply from the {cam} camera service: is 'mount-svc dslr' running?", None
+        r = mpb.CameraReply()
+        r.ParseFromString(out)
+        return r.ok, r.message, None
 
     # -- derived quantities --------------------------------------------------------------------
     def _sky(self, az_axis: float, el_axis: float, t_ns: int) -> dict:
@@ -404,6 +463,8 @@ class Gateway:
             await ws.send_str(json.dumps({"type": "status", **_msg_to_dict(self._latest_status)}))
         if self._track_msg:
             await ws.send_str(json.dumps(self._track_msg))
+        for msg in [*self._cameras.values(), *self._last_capture.values()]:
+            await ws.send_str(json.dumps(msg))
         try:
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
@@ -475,6 +536,8 @@ class Gateway:
             return True, f"{len(sats)} objects ({note})", {"names": sorted(sats)}
         if op == "passes":
             return self._passes(args)
+        if op == "camera":
+            return self._camera_cmd(args)
         if op == "set_imaging":
             self.imaging.set(str(args.get("profile", "")))
             msg = self.imaging.message()
@@ -868,6 +931,8 @@ class Gateway:
         self._subs = [
             s.declare_subscriber(self.client.key("mount/telemetry"), lambda smp: self._on_zenoh("telemetry", smp.payload.to_bytes())),
             s.declare_subscriber(self.client.key("svc/status"), lambda smp: self._on_zenoh("status", smp.payload.to_bytes())),
+            s.declare_subscriber(self.client.key("camera/*/status"), lambda smp: self._on_zenoh("camstatus", smp.payload.to_bytes())),
+            s.declare_subscriber(self.client.key("camera/*/frame"), lambda smp: self._on_zenoh("camframe", smp.payload.to_bytes())),
         ]
         self._pump = asyncio.ensure_future(self._telemetry_pump())
         self._runner = web.AppRunner(self.make_app())
