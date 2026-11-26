@@ -14,7 +14,8 @@ WebSocket messages (JSON):
     {"type": "reply", "id", "ok", "message", "data"}
   client -> server
     {"type": "request", "id", "op", "args"}
-      op: target (TargetCommand as JSON), stop, hold, park, passes, tle_names,
+      op: target (TargetCommand as JSON), stop, hold, park, tle_names,
+          passes {group, names | all, hours, min_max_el_deg}, pass_plan {name, line1, line2, rise_ns, set_ns},
           pass_preview {name, line1, line2, rise_ns, culmination_ns, set_ns} (ground track + sky path),
           enable/disable {axis} and fault_reset (straight to mount-rt),
           jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
@@ -35,11 +36,11 @@ import numpy as np
 from aiohttp import WSMsgType, web
 from google.protobuf import json_format
 
-from . import astro, kinematics
+from . import astro, kinematics, planner
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .proto import mpb
-from .targets import SatelliteTarget
+from .targets import SatelliteTarget, SgpError
 
 log = logging.getLogger(__name__)
 DEG = math.pi / 180
@@ -49,6 +50,8 @@ STATIC_DIR = REPO / "gui"
 CELESTRAK = "https://celestrak.org/NORAD/elements/gp.php?GROUP={group}&FORMAT=tle"
 TLE_GROUPS = ("stations", "visual", "active", "starlink", "weather", "science")
 TLE_MAX_AGE_S = 6 * 3600
+ALL_MAX = 400          # largest group searched with "all objects"
+PASS_ROWS_MAX = 300    # passes returned to the GUI
 
 
 def _msg_to_dict(m) -> dict:
@@ -375,36 +378,104 @@ class Gateway:
             return True, f"{len(sats)} objects ({note})", {"names": sorted(sats)}
         if op == "passes":
             return self._passes(args)
+        if op == "pass_plan":
+            return self._pass_plan(args)
         if op == "pass_preview":
             return self._pass_preview(args)
         return False, f"unknown op '{op}'", None
 
     def _passes(self, args: dict):
+        """Upcoming passes, sorted by AOS.
+
+        Watch list (default): the named objects, each pass planned by mount-svc.
+        all=True: every object in the group. Passes are found here (cheap) and planned only on
+        request (op pass_plan), because planning takes ~0.25 s per pass on the Pi. Groups with
+        more than ALL_MAX objects are refused.
+        min_max_el_deg: keep passes that culminate at least this high.
+        start_ns: search from this time instead of now (tests; planning ahead).
+        """
         group = args.get("group", "stations")
-        names = args.get("names") or []
         hours = float(args.get("hours", 12))
+        min_max_el = float(args.get("min_max_el_deg", 0))
         sats, note = self.tles.group(group)
-        rows, missing = [], []
-        for name in names:
-            tle = sats.get(name)
-            if tle is None:
-                missing.append(name)
-                continue
-            req = mpb.PassesRequest(tle=mpb.Tle(name=name, line1=tle[0], line2=tle[1]), hours=hours)
-            out = self.client.query("svc/passes", req.SerializeToString(), timeout=60)
-            if out is None:
-                return False, "no reply from mount-svc: is 'mount-svc serve' running?", None
-            rep = mpb.PassesReply()
-            rep.ParseFromString(out)
-            for i, p in enumerate(rep.passes):
-                d = _msg_to_dict(p)
-                d.update(name=name, pass_index=i, line1=tle[0], line2=tle[1])
-                rows.append(d)
+        rows, missing, bad = [], [], 0
+        if args.get("all"):
+            if len(sats) > ALL_MAX:
+                return False, (f"'{group}' has {len(sats)} objects, too many to search them all "
+                               f"(limit {ALL_MAX}); list names in Watch instead"), None
+            if self.settings.site is None:
+                return False, "no site location", None
+            mask = self.settings.tracking.horizon_min_el_deg * DEG
+            t0 = int(args.get("start_ns") or 0) or time.time_ns()
+            for name, (l1, l2) in sats.items():
+                try:
+                    sat = SatelliteTarget(self.settings.site, l1, l2, name=name)
+                    found = planner.find_passes(sat, t0, t0 + int(hours * 3600 * NS), mask)
+                except (ValueError, SgpError):
+                    bad += 1  # decayed or a bad element set
+                    continue
+                for p in found:
+                    if math.degrees(p.max_el) < min_max_el:
+                        continue
+                    rows.append({
+                        "name": name, "line1": l1, "line2": l2, "planned": False,
+                        "rise_ns": str(p.rise_ns), "culmination_ns": str(p.culmination_ns), "set_ns": str(p.set_ns),
+                        "max_el_deg": math.degrees(p.max_el), "culmination_az_deg": math.degrees(p.culmination_az),
+                        "chosen": {}, "plans": [],
+                    })
+        else:
+            for name in args.get("names") or []:
+                tle = sats.get(name)
+                if tle is None:
+                    missing.append(name)
+                    continue
+                rep = self._svc_passes(name, tle, int(args.get("start_ns") or 0), hours)
+                if rep is None:
+                    return False, "no reply from mount-svc: is 'mount-svc serve' running?", None
+                for p in rep.passes:
+                    if p.max_el_deg < min_max_el:
+                        continue
+                    d = _msg_to_dict(p)
+                    d.update(name=name, line1=tle[0], line2=tle[1], planned=True)
+                    rows.append(d)
         rows.sort(key=lambda r: int(r["rise_ns"]))
-        msg = f"{len(rows)} passes in {hours:g} h; TLEs {note}"
+        shown = rows[:PASS_ROWS_MAX]
+        what = f"{len(sats)} objects in '{group}'" if args.get("all") else f"{len(args.get('names') or []) - len(missing)} watched"
+        msg = f"{len(rows)} passes in {hours:g} h ({what}"
+        msg += f", max el ≥ {min_max_el:g}°)" if min_max_el > 0 else ")"
+        if len(rows) > len(shown):
+            msg += f"; showing the first {len(shown)}"
+        msg += f"; TLEs {note}"
+        if bad:
+            msg += f"; {bad} element sets failed (decayed?)"
         if missing:
             msg += f"; not in '{group}': {', '.join(missing)}"
-        return True, msg, {"passes": rows}
+        return True, msg, {"passes": shown, "names": sorted(sats)}
+
+    def _svc_passes(self, name: str, tle: tuple[str, str], start_ns: int, hours: float):
+        req = mpb.PassesRequest(tle=mpb.Tle(name=name, line1=tle[0], line2=tle[1]), hours=hours, start_ns=start_ns)
+        out = self.client.query("svc/passes", req.SerializeToString(), timeout=60)
+        if out is None:
+            return None
+        rep = mpb.PassesReply()
+        rep.ParseFromString(out)
+        return rep
+
+    def _pass_plan(self, args: dict):
+        """mount-svc's plans for one pass (rows from an all-in-group search are unplanned)."""
+        rise, set_ = int(args["rise_ns"]), int(args["set_ns"])
+        start = rise - 120 * NS
+        rep = self._svc_passes(str(args.get("name", "")), (str(args["line1"]), str(args["line2"])), start,
+                               (set_ - start) / 3600 / NS + 0.05)
+        if rep is None:
+            return False, "no reply from mount-svc: is 'mount-svc serve' running?", None
+        if not rep.ok or not rep.passes:
+            return False, rep.message or "pass not found", None
+        p = min(rep.passes, key=lambda q: abs(q.rise_ns - rise))
+        d = _msg_to_dict(p)
+        d.update(name=args.get("name", ""), line1=args["line1"], line2=args["line2"], planned=True)
+        mode = d["chosen"]["mode"] or "no plan fits"
+        return True, f"planned {d['name']}: {mode}", {"pass": d}
 
     # -- lifecycle ------------------------------------------------------------------------------
     async def _telemetry_pump(self) -> None:

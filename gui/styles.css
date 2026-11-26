@@ -149,3 +149,4 @@ dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
   border: 1px solid var(--warn); border-radius: 6px; padding: 6px 10px; margin: 4px 0; font-size: 13px; }
 .clockwarn label { white-space: nowrap; }
 .clockwarn input { min-height: 0; }
+.muted { color: var(--muted); }

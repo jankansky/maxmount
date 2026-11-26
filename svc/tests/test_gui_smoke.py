@@ -122,7 +122,10 @@ def test_pass_preview(gui_url, monkeypatch):
 
     from .conftest import ISS
 
+    seen = []
+
     def passes(self, args):
+        seen.append(args)
         epoch = SatelliteTarget(self.settings.site, *ISS).epoch_ns
         req = mpb.PassesRequest(tle=mpb.Tle(name="ISS", line1=ISS[0], line2=ISS[1]), hours=24, start_ns=epoch)
         rep = mpb.PassesReply()
@@ -132,7 +135,7 @@ def test_pass_preview(gui_url, monkeypatch):
             d = gateway_mod._msg_to_dict(p)
             d.update(name="ISS", pass_index=i, line1=ISS[0], line2=ISS[1])
             rows.append(d)
-        return True, f"{len(rows)} passes (test)", {"passes": rows}
+        return True, f"{len(rows)} passes (test)", {"passes": rows, "names": ["ISS"]}
 
     import maxmount_svc.gateway as gateway_mod
     monkeypatch.setattr(Gateway, "_passes", passes)
@@ -167,6 +170,17 @@ def test_pass_preview(gui_url, monkeypatch):
             page.locator(".clockwarn").get_by_label("Track anyway").check()
         rows.nth(1).click()  # again: clears
         page.wait_for_selector(".preview-note", state="detached", timeout=5000)
+        # Changing a selector searches again by itself; 'all in group' hides the watch list.
+        calls = len(seen)
+        page.get_by_label("Max el ≥").select_option("30")
+        page.wait_for_timeout(1500)
+        assert len(seen) > calls and seen[-1]["min_max_el_deg"] == 30
+        page.get_by_label("Objects").select_option("all")
+        page.wait_for_timeout(1500)
+        assert seen[-1]["all"] is True and page.get_by_label("Add an object to the watch list").count() == 0
+        page.get_by_label("Objects").select_option("watch")
+        page.get_by_label("Max el ≥").select_option("0")
+        page.wait_for_timeout(1500)
         rows.nth(0).press("Enter")
         page.wait_for_selector(".preview-note", timeout=15000)
         page.locator(".preview-note").get_by_role("button", name="Clear").click()

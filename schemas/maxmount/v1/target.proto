@@ -23,6 +23,8 @@ message Tle {
   string line2 = 3;
   uint32 pass_index = 4;        // 0 = the next pass (or the current one, if it is up)
   string mode = 5;              // "", "normal", "flipped" or "over_the_top"
+  int64 rise_ns = 6;            // if set: the pass rising at this time (±2 min, or in progress);
+                                // overrides pass_index, which shifts as passes go by
 }
 
 message AltAz {

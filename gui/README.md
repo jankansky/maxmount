@@ -30,8 +30,12 @@ svc/.venv/bin/mount-svc --system $SYS gui           # http://<pi>:8080
   - widefield and narrow-field camera panels (placeholders until `camera-svc` exists);
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets;
-  - upcoming passes for a watch list from a CelesTrak group, with each plan's mode and peak rate,
-    and **Track**. Click a pass (or select it and press Enter) to preview it on the sky dome and
+  - upcoming passes from a CelesTrak group, with each plan's mode and peak rate, and **Track**.
+    **Objects** is either the watch list (names typed or picked with **Add**, each pass planned
+    by `mount-svc`) or **all in group** (every object, up to 400; passes are planned when you
+    select one). **Max el ≥** hides low passes. Changing a selector searches again; edit the
+    watch list and press Enter or **Refresh**. **Track** names the pass by its rise time, so the
+    right pass is tracked even after earlier ones in the list have gone by. Click a pass (or select it and press Enter) to preview it on the sky dome and
     the ground track; click it again or press **Clear** to go back to the live target.
     **Track** is refused while chrony's clock error bound is above `time.max_clock_error_us`
     (10 µs needs GPS PPS). A warning above the table then shows the bound and what it means

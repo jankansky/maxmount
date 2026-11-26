@@ -60,6 +60,10 @@ def plan_summary(p: Plan | None) -> mpb.PlanSummary:
     return s
 
 
+def _utc_hms(t_ns: int) -> str:
+    return time.strftime("%H:%M:%S", time.gmtime(t_ns / NS))
+
+
 def _rejection(plans: list[Plan]) -> str:
     return "no feasible plan: " + "; ".join(f"{p.mode}: {', '.join(p.problems)}" for p in plans)
 
@@ -224,12 +228,19 @@ class MountService:
                 cross_track_rad=self._offsets.cross_track_deg * DEG,
             )
             now = time.time_ns()
-            passes = planner.find_passes(target, now, now + 24 * 3600 * NS, tr.horizon_min_el_deg * DEG)
+            end = max(now + 24 * 3600 * NS, t.rise_ns + 3 * 3600 * NS)
+            passes = planner.find_passes(target, now, end, tr.horizon_min_el_deg * DEG)
         except (ValueError, SgpError) as e:
             raise Rejected(f"bad TLE: {e}") from None
-        if len(passes) <= t.pass_index:
+        if t.rise_ns:
+            # The pass that rises at rise_ns (±2 min), or contains it if it is already up.
+            p = next((q for q in passes if q.set_ns > t.rise_ns - 120 * NS and q.rise_ns < t.rise_ns + 120 * NS), None)
+            if p is None:
+                raise Rejected(f"{target.name}: no pass rising near {_utc_hms(t.rise_ns)} UTC (over, or the TLE changed)")
+        elif len(passes) <= t.pass_index:
             raise Rejected(f"{target.name}: no pass #{t.pass_index} in the next 24 h")
-        p = passes[t.pass_index]
+        else:
+            p = passes[t.pass_index]
         if t.mode and t.mode not in ("normal", "flipped", "over_the_top"):
             raise Rejected(f"unknown mode '{t.mode}'")
         modes = (t.mode,) if t.mode else ("normal", "flipped", "over_the_top")

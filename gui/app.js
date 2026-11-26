@@ -235,18 +235,35 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
   const [group, setGroup] = useState(loadPref('group', 'stations'));
   const [names, setNames] = useState(loadPref('watch', 'ISS (ZARYA), CSS (TIANHE)'));
   const [hours, setHours] = useState(loadPref('hours', 12));
+  const [all, setAll] = useState(loadPref('allgroup', false));     // every object in the group, or the watch list
+  const [minEl, setMinEl] = useState(loadPref('minmaxel', 0));     // hide passes culminating lower than this
   const [rows, setRows] = useState([]);
+  const [groupNames, setGroupNames] = useState([]);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
-  const refresh = useCallback(async () => {
-    savePref('group', group); savePref('watch', names); savePref('hours', hours);
-    setBusy(true); setNote('computing passes…');
-    const r = await send('passes', { group, names: names.split(',').map((s) => s.trim()).filter(Boolean), hours: Number(hours) });
+  const seq = useRef(0);
+  const refresh = async () => {
+    savePref('group', group); savePref('watch', names); savePref('hours', hours); savePref('allgroup', all); savePref('minmaxel', minEl);
+    const id = ++seq.current;
+    setBusy(true); setNote(all ? `searching every object in '${group}'…` : 'computing passes…');
+    const r = await send('passes', { group, all, names: names.split(',').map((s) => s.trim()).filter(Boolean),
+      hours: Number(hours), min_max_el_deg: Number(minEl) });
+    if (id !== seq.current) return; // a newer search was started
     setBusy(false); setNote(r.message);
-    if (r.ok) setRows(r.data.passes);
-  }, [group, names, hours, send]);
-  const first = useRef(true);
-  useEffect(() => { if (connected && first.current) { first.current = false; refresh(); } }, [connected]);
+    setRows(r.ok ? r.data.passes : []);
+    if (r.ok) setGroupNames(r.data.names || []);
+  };
+  // Search again whenever a selector changes (the watch list: on Enter or Refresh).
+  useEffect(() => { if (connected) refresh(); }, [connected, group, all, hours, minEl]);
+  const addName = (n) => {
+    const list = names.split(',').map((x) => x.trim()).filter(Boolean);
+    if (n && !list.includes(n)) setNames([...list, n].join(', '));
+  };
+  // Rows from an all-in-group search are planned on demand (planning takes ~0.25 s a pass).
+  const planRow = async (p) => {
+    const r = await send('pass_plan', { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns, set_ns: p.set_ns });
+    if (r.ok) setRows((rs) => rs.map((x) => (passKey(x) === passKey(p) ? { ...r.data.pass, rise_ns: p.rise_ns } : x)));
+  };
   // Satellites need an accurate clock: mount-svc refuses a pass when chrony's error bound is
   // above time.max_clock_error_us, unless the operator explicitly overrides it here.
   const clk = status ? Number(status.clock_error_us) : -1;
@@ -256,7 +273,7 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
   useEffect(() => { if (!clockBad) setOverride(false); }, [clockBad]);
   const track = async (p) => {
     setNote(`planning ${p.name}…`);
-    const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, pass_index: p.pass_index },
+    const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns },
       allow_clock_error: clockBad && override });
     setNote(r.message);
     if (r.ok) setPreview(null); // the live track takes over; keep the preview if refused
@@ -271,11 +288,23 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
     <div class="toolbar">
       <label>CelesTrak group <select value=${group} onChange=${(e) => setGroup(e.target.value)}>
         ${(hello?.tle_groups || ['stations']).map((g) => html`<option value=${g}>${g}</option>`)}</select></label>
-      <label style="flex:1 1 220px;display:flex;gap:6px;align-items:center">Watch <input style="flex:1" value=${names} onInput=${(e) => setNames(e.target.value)} title="names as in the CelesTrak list, comma separated" /></label>
+      <label>Objects <select value=${all ? 'all' : 'watch'} onChange=${(e) => setAll(e.target.value === 'all')}>
+        <option value="watch">watch list</option><option value="all">all in group</option></select></label>
       <label>Next <select value=${hours} onChange=${(e) => setHours(Number(e.target.value))}>
         ${[6, 12, 24, 48].map((h) => html`<option value=${h}>${h} h</option>`)}</select></label>
+      <label>Max el ≥ <select value=${minEl} onChange=${(e) => setMinEl(Number(e.target.value))}>
+        ${[0, 20, 30, 45, 60].map((d) => html`<option value=${d}>${d}°</option>`)}</select></label>
       <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
     </div>
+    ${!all && html`<div class="toolbar">
+      <label style="flex:1 1 260px;display:flex;gap:6px;align-items:center">Watch
+        <input style="flex:1" value=${names} onInput=${(e) => setNames(e.target.value)} onKeyDown=${(e) => e.key === 'Enter' && refresh()}
+          title="names as in the CelesTrak group, comma separated; Enter to search" /></label>
+      <label style="display:flex;gap:6px;align-items:center">Add
+        <input list="tle-names" placeholder=${`object in '${group}'…`} aria-label="Add an object to the watch list"
+          onChange=${(e) => { addName(e.target.value.trim()); e.target.value = ''; }} /></label>
+      <datalist id="tle-names">${groupNames.map((n) => html`<option value=${n} />`)}</datalist>
+    </div>`}
     ${clockBad && html`<div class="clockwarn" role="status">
       <span><b>Clock not good enough for satellites:</b> ${clk < 0 ? 'error unknown (chrony not answering)'
         : `chrony's error bound is ±${clkMs >= 1 ? clkMs.toFixed(1) + ' ms' : clk.toFixed(0) + ' µs'}, limit ${maxClk} µs`}.
@@ -283,17 +312,18 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
       <label class="arm"><input type="checkbox" checked=${override} onChange=${(e) => setOverride(e.target.checked)} />
         Track anyway</label>
     </div>`}
-    <span class="small">${note}${rows.length ? ' · click a pass to preview it on the Sky and Ground track views' : ''}</span>
+    <span class="small">${note}${rows.length ? ' · click a pass to preview it on the Sky and Ground track views' + (all ? ' and plan it' : '') : ''}</span>
     <div class="tablewrap"><table>
       <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>
       <tbody class="mono">
         ${rows.map((p) => {
           const chosen = p.chosen || {};
           const current = status?.tle_line1 && status.tle_line1 === p.line1 && status?.plan?.start_ns && Number(status.plan.start_ns) >= Number(p.rise_ns) - 5e9 && Number(status.plan.start_ns) <= Number(p.set_ns);
-          const plan = chosen.mode ? (chosen.mode === 'over_the_top' ? html`<span class="warn">over-top ${Number(chosen.max_error_deg).toFixed(1)}°</span>` : chosen.mode)
+          const plan = p.planned === false ? html`<span class="muted" title="select the pass to plan it">—</span>`
+            : chosen.mode ? (chosen.mode === 'over_the_top' ? html`<span class="warn">over-top ${Number(chosen.max_error_deg).toFixed(1)}°</span>` : chosen.mode)
             : html`<span class="warn" title=${(p.plans || []).map((x) => x.mode + ': ' + (x.problems || []).join(', ')).join('\n')}>no plan fits</span>`;
           const key = passKey(p), sel = preview?.key === key;
-          const pick = () => setPreview(sel ? null : p);
+          const pick = () => { setPreview(sel ? null : p); if (!sel && p.planned === false) planRow(p); };
           return html`<tr class=${(current ? 'current ' : '') + (sel ? 'selected' : '')} tabindex="0" aria-selected=${sel}
             title=${sel ? 'click to clear the preview' : 'click to preview this pass'}
             onClick=${pick} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}>
@@ -303,7 +333,7 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
             <td>${Number(p.max_el_deg).toFixed(1)}°</td>
             <td>${plan}</td>
             <td>${chosen.mode ? Number(chosen.peak_az_deg_s).toFixed(2) + ' °/s' : '—'}</td>
-            <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${!chosen.mode} onClick=${(e) => { e.stopPropagation(); track(p); }}>Track</button>`}</td>
+            <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${p.planned !== false && !chosen.mode} onClick=${(e) => { e.stopPropagation(); track(p); }}>Track</button>`}</td>
           </tr>`;
         })}
       </tbody>

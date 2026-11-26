@@ -242,3 +242,56 @@ def test_track_anyway_passes_the_clock_override(stack):
             await gw.stop()
 
     asyncio.run(run())
+
+
+def test_passes_all_in_group_and_plan_on_demand(stack):
+    """'All in group' finds passes for every object without planning them; pass_plan plans one;
+    min_max_el_deg filters; oversized groups are refused."""
+    from maxmount_svc import gateway as gw_mod
+    from maxmount_svc.targets import SatelliteTarget
+
+    from .conftest import ISS
+
+    settings = stack
+    epoch = SatelliteTarget(settings.site, *ISS).epoch_ns
+    port = 18000 + __import__("random").randint(6001, 8000)
+
+    async def run():
+        gw = await _session(settings, port)
+        groups = {"stations": {"ISS": ISS, "ISS TWIN": ISS}, "starlink": {f"S{i}": ISS for i in range(gw_mod.ALL_MAX + 1)}}
+        gw.tles.group = lambda g: (groups[g], "test")
+        try:
+            async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                async def req(i, op, args):
+                    await ws.send_str(json.dumps({"type": "request", "id": i, "op": op, "args": args}))
+                    return await _recv_until(ws, lambda m: m["type"] == "reply" and m["id"] == i, timeout=90)
+
+                base = {"group": "stations", "all": True, "hours": 24, "start_ns": str(epoch)}
+                r = await req(1, "passes", base)
+                assert r["ok"], r
+                rows = r["data"]["passes"]
+                assert rows and len(rows) % 2 == 0 and {x["name"] for x in rows} == {"ISS", "ISS TWIN"}
+                assert all(x["planned"] is False and not x["chosen"] for x in rows)
+                assert [int(x["rise_ns"]) for x in rows] == sorted(int(x["rise_ns"]) for x in rows)
+                assert r["data"]["names"] == ["ISS", "ISS TWIN"]
+
+                high = await req(2, "passes", {**base, "min_max_el_deg": 40})
+                assert high["ok"] and 0 < len(high["data"]["passes"]) < len(rows)
+                assert all(x["max_el_deg"] >= 40 for x in high["data"]["passes"])
+
+                p = rows[0]
+                r = await req(3, "pass_plan", {k: p[k] for k in ("name", "line1", "line2", "rise_ns", "set_ns")})
+                assert r["ok"], r
+                planned = r["data"]["pass"]
+                assert planned["planned"] is True and planned["plans"]
+                assert abs(int(planned["rise_ns"]) - int(p["rise_ns"])) < 2 * 10**9
+
+                watch = await req(4, "passes", {"group": "stations", "names": ["ISS", "NOPE"], "hours": 24, "start_ns": str(epoch)})
+                assert watch["ok"] and all(x["planned"] for x in watch["data"]["passes"]) and "NOPE" in watch["message"]
+
+                big = await req(5, "passes", {**base, "group": "starlink"})
+                assert not big["ok"] and "too many" in big["message"]
+        finally:
+            await gw.stop()
+
+    asyncio.run(run())
