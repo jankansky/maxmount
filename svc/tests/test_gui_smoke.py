@@ -9,9 +9,11 @@ import threading
 import pytest
 
 from maxmount_svc.gateway import Gateway
+from maxmount_svc.satcat import OVERRIDES, SatCatalog
 from maxmount_svc.service import MountService
 
 from .test_e2e_mount_rt import served  # noqa: F401 - fixture
+from .test_satcat import SAMPLE
 
 playwright = pytest.importorskip("playwright.sync_api")
 
@@ -25,6 +27,7 @@ def gui_url(served):  # noqa: F811
     loop = asyncio.new_event_loop()
     ready = threading.Event()
     gw = Gateway(settings, host="127.0.0.1", port=port)
+    gw.satcat = SatCatalog.from_text(SAMPLE, overrides=OVERRIDES)  # no download in tests
 
     def run():
         asyncio.set_event_loop(loop)
@@ -162,6 +165,7 @@ def test_pass_preview(gui_url, monkeypatch):
         page.wait_for_selector("[aria-label='Pass details'] table.kv", timeout=15000)
         detail = page.locator("[aria-label='Pass details']").text_content()
         assert "ISS" in detail and "AOS" in detail and "Lighting" in detail
+        assert "109 × 73 m" in detail and "standard -2.5" in detail or "not sunlit" in detail
         assert rows.nth(1).get_attribute("aria-selected") == "true"
         page.get_by_text("AOS to LOS").wait_for(timeout=5000)
         # A refused Track (the test machine's clock is unknown or too poor, and the 2008 pass is
@@ -188,7 +192,7 @@ def test_pass_preview(gui_url, monkeypatch):
         page.wait_for_timeout(1500)
         lit_before = rows.nth(0).locator("td").nth(4).text_content()
         rows.nth(0).click()
-        page.wait_for_function("() => !document.querySelector('[aria-label=Passes] tbody tr td:nth-child(6)').textContent.includes('—')", timeout=15000)
+        page.wait_for_function("() => !document.querySelector('[aria-label=Passes] tbody tr td:nth-child(8)').textContent.includes('—')", timeout=15000)
         assert rows.nth(0).locator("td").nth(4).text_content() == lit_before != "?"
         rows.nth(0).click()
         page.get_by_label("Objects").select_option("watch")

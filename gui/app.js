@@ -38,6 +38,13 @@ const NUDGE_OPTS = [[10, '10″'], [60, '1′'], [600, '10′']];
 const OBJECT_OPTS = [['watch', 'watch list'], ['all', 'all in group']];
 const HOURS_OPTS = [6, 12, 24, 48].map((h) => [h, `${h} h`]);
 const MINEL_OPTS = [0, 20, 30, 45, 60].map((d) => [d, `${d}°`]);
+const MAG_OPTS = [['any', 'any'], ...[0, 1, 2, 3, 4, 5, 6].map((m) => [m, `≤ ${m}`])];
+// Row fields computed by the gateway's pass search; kept when a row is planned on selection.
+const SEEN_KEYS = ['sunlit_frac', 'sun_el_deg', 'peak_mag', 'peak_mag_ns', 'mag_estimated', 'std_mag', 'size_m',
+  'size_estimated', 'ang_size_arcsec', 'min_range_km'];
+const fmtMag = (p) => (p.peak_mag == null ? null : `${p.mag_estimated ? '≈' : ''}${Number(p.peak_mag).toFixed(1)}`);
+const fmtAng = (a) => (a >= 60 ? `${(a / 60).toFixed(1)}′` : `${a < 10 ? Number(a).toFixed(1) : Math.round(a)}″`);
+const fmtSize = (p) => (p.ang_size_arcsec == null ? null : `${p.size_estimated ? '≈' : ''}${fmtAng(p.ang_size_arcsec)}`);
 const LIGHT_OPTS = [['any', 'any'], ['sunlit', 'sunlit'], ['dark_sky', 'sunlit, dark sky']];
 const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives']];
 const screenFromHash = () => { const h = location.hash.slice(1); return SCREENS.some(([id]) => id === h) ? h : 'track'; };
@@ -243,24 +250,25 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
   const [all, setAll] = useState(loadPref('allgroup', false));     // every object in the group, or the watch list
   const [minEl, setMinEl] = useState(loadPref('minmaxel', 0));     // hide passes culminating lower than this
   const [lighting, setLighting] = useState(loadPref('lighting', 'any'));
+  const [maxMag, setMaxMag] = useState(loadPref('maxmag', 'any'));
   const [rows, setRows] = useState([]);
   const [groupNames, setGroupNames] = useState([]);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
   const refresh = async () => {
-    savePref('group', group); savePref('watch', names); savePref('hours', hours); savePref('allgroup', all); savePref('minmaxel', minEl); savePref('lighting', lighting);
+    savePref('group', group); savePref('watch', names); savePref('hours', hours); savePref('allgroup', all); savePref('minmaxel', minEl); savePref('lighting', lighting); savePref('maxmag', maxMag);
     const id = ++seq.current;
     setBusy(true); setNote(all ? `searching every object in '${group}'…` : 'computing passes…');
     const r = await send('passes', { group, all, names: names.split(',').map((s) => s.trim()).filter(Boolean),
-      hours: Number(hours), min_max_el_deg: Number(minEl), lighting });
+      hours: Number(hours), min_max_el_deg: Number(minEl), lighting, max_mag: maxMag });
     if (id !== seq.current) return; // a newer search was started
     setBusy(false); setNote(r.message);
     setRows(r.ok ? r.data.passes : []);
     if (r.ok) setGroupNames(r.data.names || []);
   };
   // Search again whenever a selector changes (the watch list: on Enter or Refresh).
-  useEffect(() => { if (connected) refresh(); }, [connected, group, all, hours, minEl, lighting]);
+  useEffect(() => { if (connected) refresh(); }, [connected, group, all, hours, minEl, lighting, maxMag]);
   const nameOpts = useMemo(() => groupNames.map((n) => html`<option value=${n} />`), [groupNames]);
   const addName = (n) => {
     const list = names.split(',').map((x) => x.trim()).filter(Boolean);
@@ -271,7 +279,7 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
     const r = await send('pass_plan', { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns, set_ns: p.set_ns });
     if (!r.ok) return;
     // Keep what the search gave the row (lighting, merged modules) and add the plans.
-    const row = { ...p, ...r.data.pass, rise_ns: p.rise_ns, also: p.also, sunlit_frac: p.sunlit_frac, sun_el_deg: p.sun_el_deg };
+    const row = { ...p, ...r.data.pass, rise_ns: p.rise_ns, also: p.also, ...Object.fromEntries(SEEN_KEYS.map((k) => [k, p[k]])) };
     setRows((rs) => rs.map((x) => (passKey(x) === passKey(p) ? row : x)));
     updatePreviewRow(row);
   };
@@ -305,6 +313,8 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
       <label>Max el ≥ <${Select} value=${minEl} onChange=${setMinEl} options=${MINEL_OPTS} /></label>
       <label>Lighting <${Select} value=${lighting} onChange=${setLighting} options=${LIGHT_OPTS}
         title="sunlit: the satellite is in sunlight for part of the pass; dark sky: and the Sun is below −6° at culmination" /></label>
+      <label>Mag <${Select} value=${maxMag} onChange=${setMaxMag} options=${MAG_OPTS}
+        title="keep passes predicted at least this bright (passes without a magnitude are hidden)" /></label>
       <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
     </div>
     ${!all && html`<div class="toolbar">
@@ -329,9 +339,9 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
       <button class="btn primary" onClick=${() => { setTracked(''); setScreen('track'); }}>Open the Track screen →</button></div>`}
     <span class="small">${note}${rows.length ? ' · click a pass to preview it' + (all ? ' and plan it' : '') : ''}</span>
     <div class="tablewrap"><table>
-      <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th title="share of the pass with the satellite sunlit; hover a value for the Sun's elevation">Sunlit</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>
+      <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th title="share of the pass with the satellite sunlit; hover a value for the Sun's elevation">Sunlit</th><th title="brightest predicted visual magnitude (≈: estimated from radar size)">Mag</th><th title="largest angular size, at the closest point (≈: estimated from radar size)">Size</th><th>Plan</th><th></th></tr></thead>
       <tbody class="mono">
-        ${!rows.length && html`<tr class="empty"><td colspan="8">${busy ? 'Searching…' : html`No passes. ${note}
+        ${!rows.length && html`<tr class="empty"><td colspan="9">${busy ? 'Searching…' : html`No passes. ${note}
           <br /><span class="muted">${all ? 'Try a longer window or a lower Max el.'
             : (lighting !== 'any' ? 'Try Lighting: any, or a longer window. ' : '') + 'Watch takes names or parts of names from the group (e.g. ISS, HUBBLE, NOAA 19) or catalog numbers (25544), comma separated.'}</span>`}</td></tr>`}
         ${rows.map((p) => {
@@ -351,8 +361,9 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
             <td>${Number(p.max_el_deg).toFixed(1)}°</td>
             <td title=${p.sun_el_deg != null ? `Sun ${Number(p.sun_el_deg).toFixed(0)}° at max el` : ''}
               class=${p.sun_el_deg != null && p.sun_el_deg > -6 ? 'muted' : ''}>${p.sunlit_frac == null ? '?' : p.sunlit_frac > 0 ? `${Math.round(p.sunlit_frac * 100)}%${p.sun_el_deg > -6 ? ' ☀' : ''}` : '—'}</td>
+            <td title=${p.std_mag != null ? `standard mag ${p.std_mag}${p.mag_estimated ? ' (from radar size)' : ''}` : 'no magnitude data'}>${fmtMag(p) ?? '—'}</td>
+            <td title=${p.size_m ? `${p.size_m.join(' × ')} m at ${Math.round(p.min_range_km)} km` : 'no size data'}>${fmtSize(p) ?? '—'}</td>
             <td>${plan}</td>
-            <td>${chosen.mode ? Number(chosen.peak_az_deg_s).toFixed(2) + ' °/s' : '—'}</td>
             <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${p.planned !== false && !chosen.mode} onClick=${(e) => { e.stopPropagation(); track(p); }}>Track</button>`}</td>
           </tr>`;
         })}
@@ -442,6 +453,10 @@ function PassDetail({ preview, status, clearPreview }) {
       ${row('LOS', `${utc(p.set_ns)} · az ${az(sky[sky.length - 1][0])}`)}
       ${row('Duration', dur((Number(p.set_ns) - Number(p.rise_ns)) / 1e9))}
       ${row('Lighting', preview.sunlit)}
+      ${row('Brightness', p.peak_mag != null ? `mag ${fmtMag(p)} at ${utc(p.peak_mag_ns)} (standard ${p.std_mag}${p.mag_estimated ? ', from radar size' : ''})`
+        : p.std_mag != null ? 'not sunlit' : 'no magnitude data (add it to config/satellites.yaml)')}
+      ${row('Size', p.size_m ? `${p.size_m.join(' × ')} m${p.size_estimated ? ' (from radar size)' : ''} · up to ${fmtAng(p.ang_size_arcsec)} at ${Math.round(p.min_range_km)} km`
+        : p.min_range_km != null ? `no size data · closest ${Math.round(p.min_range_km)} km` : '—')}
       ${row('Plan', p.planned === false ? 'planning…' : ch.mode ? `${ch.mode}${ch.mode === 'over_the_top' ? ` (error ${Number(ch.max_error_deg).toFixed(1)}°)` : ''}` : 'no plan fits')}
       ${ch.mode && row('Peak rates', `az ${Number(ch.peak_az_deg_s).toFixed(2)} °/s · el ${Number(ch.peak_el_deg_s).toFixed(2)} °/s`)}
     </tbody></table>

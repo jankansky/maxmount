@@ -1,0 +1,10 @@
+# Satellite brightness and size, adding to or replacing Mike McCants' quicksat.mag
+# (downloaded by the GUI gateway). Keyed by catalog (NORAD) number.
+#
+# std_mag: intrinsic magnitude in the quicksat.mag standard: 1000 km range, full phase,
+#          brightest likely orientation. A Molczan / "mcnames" standard magnitude (90 deg
+#          phase, average orientation) is about 1.4 magnitudes fainter: subtract 1.4 to convert.
+# size_m:  [length, width, depth] in metres (depth 0 or omitted: a cylinder or a panel).
+# note:    where the values came from.
+
+25544: {size_m: [109, 73], note: "ISS: about 109 m across the truss by 73 m (NASA); std_mag from quicksat.mag"}

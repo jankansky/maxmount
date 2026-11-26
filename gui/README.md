@@ -39,6 +39,13 @@ it, **Drives** (`#drives`).
     pass; *sunlit, dark sky* also needs the Sun below −6° at culmination. The **Sunlit** column
     gives the sunlit share of each pass (☀: the sky is still bright); hover for the Sun's
     elevation.
+  - **Mag** and **Size:** brightest predicted visual magnitude while sunlit, and the largest
+    angular size (largest dimension over the closest range). From Mike McCants'
+    `quicksat.mag` (downloaded monthly by the gateway) plus `config/satellites.yaml`; values
+    marked ≈ are estimated from the radar cross-section; see `svc/src/maxmount_svc/satcat.py`
+    for the model. Many recent objects (CSS, Starlink) have no data until added to
+    `config/satellites.yaml`. The **Mag** filter hides passes fainter than the limit, and
+    passes without a magnitude. Flares and tumbling are not predicted.
   - **Max el ≥** hides low passes. Changing a selector searches again; after editing Watch,
     press Enter or **Refresh**. An empty list says why.
   - Click a pass (or select it and press Enter) to preview it; click it again or press

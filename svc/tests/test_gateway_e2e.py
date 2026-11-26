@@ -8,9 +8,11 @@ import aiohttp
 import pytest
 
 from maxmount_svc.gateway import STATIC_DIR, Gateway
+from maxmount_svc.satcat import OVERRIDES, SatCatalog
 from maxmount_svc.service import MountService
 
 from .test_e2e_mount_rt import served  # noqa: F401 - fixture
+from .test_satcat import SAMPLE
 
 
 @pytest.fixture
@@ -26,6 +28,7 @@ def stack(served):  # noqa: F811
 
 async def _session(settings, port):
     gw = Gateway(settings, host="127.0.0.1", port=port)
+    gw.satcat = SatCatalog.from_text(SAMPLE, overrides=OVERRIDES)  # no download in tests
     await gw.start()
     return gw
 
@@ -293,6 +296,16 @@ def test_passes_all_in_group_and_plan_on_demand(stack):
                 assert watch["ok"] and watch["data"]["passes"] and all(x["planned"] for x in watch["data"]["passes"])
                 assert {x["name"] for x in watch["data"]["passes"]} == {"ISS TWIN"} and "NOPE" in watch["message"]
 
+                # Brightness and size from the catalogue (ISS: std mag -2.5, 109 m).
+                for x in rows:
+                    assert x["std_mag"] == -2.5 and x["size_m"] == [109, 73] and 300 < x["min_range_km"] < 2600
+                    assert x["ang_size_arcsec"] == pytest.approx(109 / 1000 / x["min_range_km"] * 206265, rel=0.01)
+                    if x["sunlit_frac"]:
+                        assert -5 < x["peak_mag"] < 4 and int(x["rise_ns"]) <= int(x["peak_mag_ns"]) <= int(x["set_ns"])
+                    else:
+                        assert x["peak_mag"] is None
+                bright = await req(9, "passes", {**base, "max_mag": 0})
+                assert bright["ok"] and all(x["peak_mag"] <= 0 for x in bright["data"]["passes"])
                 # Lighting: every row says how much of the pass is sunlit and where the Sun is.
                 assert all(0 <= x["sunlit_frac"] <= 1 and -90 <= x["sun_el_deg"] <= 90 for x in rows)
                 lit = (await req(6, "passes", {**base, "lighting": "sunlit"}))["data"]["passes"]

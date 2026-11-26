@@ -36,7 +36,7 @@ import numpy as np
 from aiohttp import WSMsgType, web
 from google.protobuf import json_format
 
-from . import astro, kinematics, planner
+from . import astro, kinematics, planner, satcat
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .proto import mpb
@@ -154,6 +154,7 @@ class Gateway:
         self.static_dir = Path(static_dir)
         self.park = (park_az_deg, park_el_deg)
         self.tles = TleCache()
+        self.satcat = satcat.SatCatalog()
         self.clients: set[web.WebSocketResponse] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.client: MountClient | None = None
@@ -446,6 +447,7 @@ class Gateway:
         more than ALL_MAX objects are refused.
         min_max_el_deg: keep passes that culminate at least this high.
         start_ns: search from this time instead of now (tests; planning ahead).
+        max_mag: keep passes predicted brighter than this (unknown magnitudes are dropped).
         lighting: "any" (default), "sunlit" (the satellite is sunlit for part of the pass) or
             "dark_sky" (sunlit, with the Sun below -6 deg at the site at culmination).
         Each row gets sunlit_frac (0..1) and sun_el_deg (at culmination).
@@ -500,6 +502,11 @@ class Gateway:
         if lighting not in ("any", "sunlit", "dark_sky"):
             return False, f"unknown lighting filter '{lighting}'", None
         rows = [r for r in rows if self._add_lighting(r) and _lit_enough(r, lighting)]
+        max_mag = args.get("max_mag")
+        no_mag = 0
+        if max_mag not in (None, "", "any"):
+            no_mag = sum(r["peak_mag"] is None for r in rows)
+            rows = [r for r in rows if r["peak_mag"] is not None and r["peak_mag"] <= float(max_mag)]
         rows = _merge_docked(rows)
         rows.sort(key=lambda r: int(r["rise_ns"]))
         shown = rows[:PASS_ROWS_MAX]
@@ -511,6 +518,9 @@ class Gateway:
         if len(rows) > len(shown):
             msg += f"; showing the first {len(shown)}"
         msg += f"; TLEs {note}"
+        if max_mag not in (None, "", "any"):
+            msg += f"; brighter than mag {float(max_mag):g}" + (f" ({no_mag} without a magnitude hidden)" if no_mag else "")
+        msg += f"; {self.satcat.note}"
         if bad:
             msg += f"; {bad} element sets failed (decayed?)"
         if missing:
@@ -518,20 +528,56 @@ class Gateway:
         return True, msg, {"passes": shown, "names": sorted(sats)}
 
     def _add_lighting(self, row: dict) -> bool:
-        """Adds sunlit_frac (fraction of the pass with the satellite in sunlight, 10 s steps)
-        and sun_el_deg (the Sun's elevation at the site at culmination). Always True."""
+        """Adds what the passes table shows about seeing the satellite (always returns True):
+
+        sunlit_frac     fraction of the pass with the satellite in sunlight (10 s steps)
+        sun_el_deg      the Sun's elevation at the site at culmination
+        peak_mag        brightest predicted visual magnitude while sunlit (None: unknown or
+                        in shadow), and peak_mag_ns when; mag_estimated if from the RCS
+        std_mag         the catalogue's intrinsic magnitude (quicksat.mag standard)
+        size_m          dimensions (m); size_estimated if from the RCS
+        ang_size_arcsec largest dimension over the closest range; min_range_km
+        """
+        keys = ("sunlit_frac", "sun_el_deg", "peak_mag", "peak_mag_ns", "mag_estimated", "std_mag", "size_m",
+                "size_estimated", "ang_size_arcsec", "min_range_km")
+        for k in keys:
+            row.setdefault(k, None)
         if self.settings.site is None:
-            row["sunlit_frac"] = row["sun_el_deg"] = None
             return True
+        site = self.settings.site
         rise, set_, culm = int(row["rise_ns"]), int(row["set_ns"]), int(row["culmination_ns"])
+        sun_az, sun_el = astro.sun_observed(np.int64(culm), site)
+        row["sun_el_deg"] = round(float(np.degrees(sun_el)), 1)
         try:
-            sat = SatelliteTarget(self.settings.site, row["line1"], row["line2"])
-            lit = sat.sunlit(np.linspace(rise, set_, max(2, (set_ - rise) // (10 * NS) + 1)).astype(np.int64))
-            row["sunlit_frac"] = round(float(np.mean(lit)), 3)
+            sat = SatelliteTarget(site, row["line1"], row["line2"])
+            t = np.linspace(rise, set_, max(2, (set_ - rise) // (10 * NS) + 1)).astype(np.int64)
+            lit = sat.sunlit(t)
+            enu = sat.geometric_enu_km(t)
         except (ValueError, SgpError):
-            row["sunlit_frac"] = None
-        _az, el = astro.sun_observed(np.int64(culm), self.settings.site)
-        row["sun_el_deg"] = round(float(np.degrees(el)), 1)
+            return True
+        row["sunlit_frac"] = round(float(np.mean(lit)), 3)
+        rng = np.linalg.norm(enu, axis=-1)
+        row["min_range_km"] = round(float(rng.min()), 1)
+        try:
+            self.satcat.load()
+            info = self.satcat.get(row["line1"][2:7])
+        except Exception:  # noqa: BLE001 - brightness is a nicety; never fail the pass list
+            log.exception("satellite catalogue")
+            info = None
+        if info is None:
+            return True
+        if info.size_m:
+            row["size_m"], row["size_estimated"] = list(info.size_m), info.size_estimated
+            row["ang_size_arcsec"] = round(math.degrees(info.max_size_m / 1000 / rng.min()) * 3600, 1)
+        row["std_mag"], row["mag_estimated"] = info.std_mag, info.mag_estimated
+        if info.std_mag is not None and lit.any():
+            u = enu / rng[:, None]
+            sun = astro.azel_to_enu(np.float64(sun_az), np.float64(sun_el))
+            phase = np.arccos(np.clip(-(u @ sun), -1, 1))  # Sun-satellite-observer angle
+            el = np.arcsin(np.clip(u[:, 2], -1, 1))
+            mag = np.where(lit, satcat.predicted_mag(info.std_mag, rng, phase, el), np.inf)
+            k = int(np.argmin(mag))
+            row["peak_mag"], row["peak_mag_ns"] = round(float(mag[k]), 1), str(int(t[k]))
         return True
 
     def _svc_passes(self, name: str, tle: tuple[str, str], start_ns: int, hours: float):
