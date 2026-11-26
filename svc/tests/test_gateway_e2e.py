@@ -270,7 +270,8 @@ def test_passes_all_in_group_and_plan_on_demand(stack):
                 r = await req(1, "passes", base)
                 assert r["ok"], r
                 rows = r["data"]["passes"]
-                assert rows and len(rows) % 2 == 0 and {x["name"] for x in rows} == {"ISS", "ISS TWIN"}
+                # Identical orbits (like docked modules) are merged into one row.
+                assert rows and {x["name"] for x in rows} == {"ISS"} and all(x["also"] == ["ISS TWIN"] for x in rows)
                 assert all(x["planned"] is False and not x["chosen"] for x in rows)
                 assert [int(x["rise_ns"]) for x in rows] == sorted(int(x["rise_ns"]) for x in rows)
                 assert r["data"]["names"] == ["ISS", "ISS TWIN"]
@@ -286,8 +287,9 @@ def test_passes_all_in_group_and_plan_on_demand(stack):
                 assert planned["planned"] is True and planned["plans"]
                 assert abs(int(planned["rise_ns"]) - int(p["rise_ns"])) < 2 * 10**9
 
-                watch = await req(4, "passes", {"group": "stations", "names": ["ISS", "NOPE"], "hours": 24, "start_ns": str(epoch)})
-                assert watch["ok"] and all(x["planned"] for x in watch["data"]["passes"]) and "NOPE" in watch["message"]
+                watch = await req(4, "passes", {"group": "stations", "names": ["iss twin", "NOPE"], "hours": 24, "start_ns": str(epoch)})
+                assert watch["ok"] and watch["data"]["passes"] and all(x["planned"] for x in watch["data"]["passes"])
+                assert {x["name"] for x in watch["data"]["passes"]} == {"ISS TWIN"} and "NOPE" in watch["message"]
 
                 big = await req(5, "passes", {**base, "group": "starlink"})
                 assert not big["ok"] and "too many" in big["message"]
@@ -295,3 +297,20 @@ def test_passes_all_in_group_and_plan_on_demand(stack):
             await gw.stop()
 
     asyncio.run(run())
+
+
+def test_watch_terms_match_names_and_catalog_numbers():
+    from maxmount_svc.gateway import WATCH_MAX, _match_names
+
+    l1 = "1 {:05d}U 98067A   08264.51782528 -.00002182  00000-0 -11606-4 0  2927"
+    sats = {"ISS (ZARYA)": (l1.format(25544), ""), "ISS (NAUKA)": (l1.format(49044), ""),
+            "CSS (TIANHE)": (l1.format(48274), ""), "HST": (l1.format(20580), "")}
+    assert _match_names(sats, ["ISS"])[0] == ["ISS (ZARYA)", "ISS (NAUKA)"]
+    assert _match_names(sats, ["iss (zarya)"])[0] == ["ISS (ZARYA)"]
+    assert _match_names(sats, ["HST"])[0] == ["HST"]                     # exact name wins
+    assert _match_names(sats, ["20580", "025544"])[0] == ["HST", "ISS (ZARYA)"]
+    names, notes = _match_names(sats, ["ISS", "ISS (ZARYA)", "nope", " "])
+    assert names == ["ISS (ZARYA)", "ISS (NAUKA)"] and notes["missing"] == ["nope"]
+    many = {f"STARLINK-{i}": (l1.format(i), "") for i in range(WATCH_MAX + 1)}
+    names, notes = _match_names(many, ["starlink"])
+    assert names == [] and notes["capped"] == "starlink" and notes["count"] == WATCH_MAX + 1

@@ -58,6 +58,52 @@ def _msg_to_dict(m) -> dict:
     return json_format.MessageToDict(m, preserving_proto_field_name=True, always_print_fields_with_no_presence=True)
 
 
+WATCH_MAX = 30         # objects one watch-list term may match
+
+
+def _norad(line1: str) -> str:
+    return line1[2:7].strip().lstrip("0")
+
+
+def _match_names(sats: dict, terms: list[str]):
+    """Watch-list terms -> object names. A term matches, in order of preference: the exact
+    name, a catalog number, or every name containing it (case-insensitive), so 'ISS' finds
+    'ISS (ZARYA)' and 'ISS (NAUKA)'."""
+    out, notes = [], {"missing": [], "capped": "", "count": 0}
+    for term in (t.strip() for t in terms):
+        if not term:
+            continue
+        if term in sats:
+            found = [term]
+        elif term.isdigit():
+            found = [n for n, (l1, _l2) in sats.items() if _norad(l1) == term.lstrip("0")]
+        else:
+            found = [n for n in sats if term.casefold() in n.casefold()]
+        if not found:
+            notes["missing"].append(term)
+        elif len(found) > WATCH_MAX:
+            notes.update(capped=term, count=len(found))
+            return [], notes
+        out += [n for n in found if n not in out]
+    return out, notes
+
+
+def _merge_docked(rows: list[dict]) -> list[dict]:
+    """Objects docked together (ISS modules, CSS modules) have separate element sets with the
+    same passes; keep one row (lowest catalog number) and list the others in 'also'."""
+    rows = sorted(rows, key=lambda r: (int(r["rise_ns"]), int(_norad(r["line1"]) or 0)))
+    out: list[dict] = []
+    for r in rows:
+        for k in out[-8:]:
+            if (abs(int(k["rise_ns"]) - int(r["rise_ns"])) < 15 * NS and abs(int(k["set_ns"]) - int(r["set_ns"])) < 15 * NS
+                    and abs(k["max_el_deg"] - r["max_el_deg"]) < 0.5):
+                k.setdefault("also", []).append(r["name"])
+                break
+        else:
+            out.append(r)
+    return out
+
+
 class TleCache:
     """CelesTrak element sets by group, cached on disk for offline use."""
 
@@ -424,11 +470,13 @@ class Gateway:
                         "chosen": {}, "plans": [],
                     })
         else:
-            for name in args.get("names") or []:
-                tle = sats.get(name)
-                if tle is None:
-                    missing.append(name)
-                    continue
+            chosen, notes = _match_names(sats, args.get("names") or [])
+            missing = notes["missing"]
+            if notes["capped"]:
+                return False, (f"'{notes['capped']}' matches {notes['count']} objects in '{group}'; use a more specific "
+                               f"name or a catalog number (or Objects: all in group)"), {"passes": [], "names": sorted(sats)}
+            for name in chosen:
+                tle = sats[name]
                 rep = self._svc_passes(name, tle, int(args.get("start_ns") or 0), hours)
                 if rep is None:
                     return False, "no reply from mount-svc: is 'mount-svc serve' running?", None
@@ -438,9 +486,11 @@ class Gateway:
                     d = _msg_to_dict(p)
                     d.update(name=name, line1=tle[0], line2=tle[1], planned=True)
                     rows.append(d)
+        rows = _merge_docked(rows)
         rows.sort(key=lambda r: int(r["rise_ns"]))
         shown = rows[:PASS_ROWS_MAX]
-        what = f"{len(sats)} objects in '{group}'" if args.get("all") else f"{len(args.get('names') or []) - len(missing)} watched"
+        what = f"{len(sats)} objects in '{group}'" if args.get("all") else (
+            f"watching {', '.join(chosen)}" if chosen else "no watched objects")
         msg = f"{len(rows)} passes in {hours:g} h ({what}"
         msg += f", max el ≥ {min_max_el:g}°)" if min_max_el > 0 else ")"
         if len(rows) > len(shown):
@@ -449,7 +499,7 @@ class Gateway:
         if bad:
             msg += f"; {bad} element sets failed (decayed?)"
         if missing:
-            msg += f"; not in '{group}': {', '.join(missing)}"
+            msg += f"; nothing in '{group}' matches: {', '.join(missing)}"
         return True, msg, {"passes": shown, "names": sorted(sats)}
 
     def _svc_passes(self, name: str, tle: tuple[str, str], start_ns: int, hours: float):

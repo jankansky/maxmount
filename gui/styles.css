@@ -150,3 +150,5 @@ dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
 .clockwarn label { white-space: nowrap; }
 .clockwarn input { min-height: 0; }
 .muted { color: var(--muted); }
+tr.empty td { white-space: normal; font-family: inherit; padding: 14px 8px; cursor: default; }
+.tablewrap tbody tr.empty:hover { background: none; }

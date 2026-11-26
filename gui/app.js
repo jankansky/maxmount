@@ -299,7 +299,8 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
     ${!all && html`<div class="toolbar">
       <label style="flex:1 1 260px;display:flex;gap:6px;align-items:center">Watch
         <input style="flex:1" value=${names} onInput=${(e) => setNames(e.target.value)} onKeyDown=${(e) => e.key === 'Enter' && refresh()}
-          title="names as in the CelesTrak group, comma separated; Enter to search" /></label>
+          placeholder="e.g. ISS, CSS, 25544"
+          title="names, parts of names or catalog numbers, comma separated; Enter to search" /></label>
       <label style="display:flex;gap:6px;align-items:center">Add
         <input list="tle-names" placeholder=${`object in '${group}'…`} aria-label="Add an object to the watch list"
           onChange=${(e) => { addName(e.target.value.trim()); e.target.value = ''; }} /></label>
@@ -316,6 +317,9 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
     <div class="tablewrap"><table>
       <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>
       <tbody class="mono">
+        ${!rows.length && html`<tr class="empty"><td colspan="7">${busy ? 'Searching…' : html`No passes. ${note}
+          <br /><span class="muted">${all ? 'Try a longer window or a lower Max el.'
+            : 'Watch takes names or parts of names from the group (e.g. ISS, HUBBLE, NOAA 19) or catalog numbers (25544), comma separated.'}</span>`}</td></tr>`}
         ${rows.map((p) => {
           const chosen = p.chosen || {};
           const current = status?.tle_line1 && status.tle_line1 === p.line1 && status?.plan?.start_ns && Number(status.plan.start_ns) >= Number(p.rise_ns) - 5e9 && Number(status.plan.start_ns) <= Number(p.set_ns);
@@ -327,7 +331,7 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
           return html`<tr class=${(current ? 'current ' : '') + (sel ? 'selected' : '')} tabindex="0" aria-selected=${sel}
             title=${sel ? 'click to clear the preview' : 'click to preview this pass'}
             onClick=${pick} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}>
-            <td style="font-family:inherit">${p.name}</td>
+            <td style="font-family:inherit">${p.name}${p.also?.length ? html` <span class="muted" title=${'same pass (docked): ' + p.also.join(', ')}>+${p.also.length}</span>` : ''}</td>
             <td>${utc(p.rise_ns)}</td>
             <td>${dur((Number(p.set_ns) - Number(p.rise_ns)) / 1e9)}</td>
             <td>${Number(p.max_el_deg).toFixed(1)}°</td>
