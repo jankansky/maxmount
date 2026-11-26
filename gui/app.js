@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // maxmount GUI: Track screen and app shell (Drives screen in drives.js). Talks only to the gateway (mount-svc gui) over a WebSocket.
-import { html, render, useState, useEffect, useRef, useCallback } from './vendor/preact-htm-standalone.module.js';
+import { html, render, useState, useEffect, useRef, useCallback, useMemo } from './vendor/preact-htm-standalone.module.js';
+import { Select } from './lib/ui.js';
 import { connect } from './lib/ws.js';
 import { drawStrip, drawSky, drawMap, cssVar } from './lib/charts.js';
 import { pad, dms, hms, utc, dur, loadPref, savePref } from './lib/util.js';
@@ -33,6 +34,11 @@ function Chip({ cls = '', children, title }) {
   return html`<span class=${'chip mono ' + cls} title=${title}>${children}</span>`;
 }
 
+const NUDGE_OPTS = [[10, '10″'], [60, '1′'], [600, '10′']];
+const OBJECT_OPTS = [['watch', 'watch list'], ['all', 'all in group']];
+const HOURS_OPTS = [6, 12, 24, 48].map((h) => [h, `${h} h`]);
+const MINEL_OPTS = [0, 20, 30, 45, 60].map((d) => [d, `${d}°`]);
+const LIGHT_OPTS = [['any', 'any'], ['sunlit', 'sunlit'], ['dark_sky', 'sunlit, dark sky']];
 const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives']];
 const screenFromHash = () => { const h = location.hash.slice(1); return SCREENS.some(([id]) => id === h) ? h : 'track'; };
 const LATER = ['Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
@@ -213,9 +219,7 @@ function Corrections({ status, send }) {
         <button aria-label="Azimuth plus" onClick=${() => apply({ az_arcsec: cur.az_arcsec + nudge })}>→</button>
         <span></span><button aria-label="Elevation down" onClick=${() => apply({ el_arcsec: cur.el_arcsec - nudge })}>↓</button><span></span>
       </div>
-      <select aria-label="Nudge step" value=${nudge} onChange=${(e) => setNudge(Number(e.target.value))}>
-        <option value="10">10″</option><option value="60">1′</option><option value="600">10′</option>
-      </select>
+      <${Select} aria-label="Nudge step" value=${nudge} onChange=${setNudge} options=${NUDGE_OPTS} />
       <span class="mono small">az ${cur.az_arcsec.toFixed(0)}″ · el ${cur.el_arcsec.toFixed(0)}″</span>
     </div>
     <div class="group">
@@ -238,24 +242,26 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
   const [hours, setHours] = useState(loadPref('hours', 12));
   const [all, setAll] = useState(loadPref('allgroup', false));     // every object in the group, or the watch list
   const [minEl, setMinEl] = useState(loadPref('minmaxel', 0));     // hide passes culminating lower than this
+  const [lighting, setLighting] = useState(loadPref('lighting', 'any'));
   const [rows, setRows] = useState([]);
   const [groupNames, setGroupNames] = useState([]);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
   const refresh = async () => {
-    savePref('group', group); savePref('watch', names); savePref('hours', hours); savePref('allgroup', all); savePref('minmaxel', minEl);
+    savePref('group', group); savePref('watch', names); savePref('hours', hours); savePref('allgroup', all); savePref('minmaxel', minEl); savePref('lighting', lighting);
     const id = ++seq.current;
     setBusy(true); setNote(all ? `searching every object in '${group}'…` : 'computing passes…');
     const r = await send('passes', { group, all, names: names.split(',').map((s) => s.trim()).filter(Boolean),
-      hours: Number(hours), min_max_el_deg: Number(minEl) });
+      hours: Number(hours), min_max_el_deg: Number(minEl), lighting });
     if (id !== seq.current) return; // a newer search was started
     setBusy(false); setNote(r.message);
     setRows(r.ok ? r.data.passes : []);
     if (r.ok) setGroupNames(r.data.names || []);
   };
   // Search again whenever a selector changes (the watch list: on Enter or Refresh).
-  useEffect(() => { if (connected) refresh(); }, [connected, group, all, hours, minEl]);
+  useEffect(() => { if (connected) refresh(); }, [connected, group, all, hours, minEl, lighting]);
+  const nameOpts = useMemo(() => groupNames.map((n) => html`<option value=${n} />`), [groupNames]);
   const addName = (n) => {
     const list = names.split(',').map((x) => x.trim()).filter(Boolean);
     if (n && !list.includes(n)) setNames([...list, n].join(', '));
@@ -291,14 +297,13 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
       <button role="tab" disabled title="not built yet">Aircraft (ADS-B)</button>
     </div>
     <div class="toolbar">
-      <label>CelesTrak group <select value=${group} onChange=${(e) => setGroup(e.target.value)}>
-        ${(hello?.tle_groups || ['stations']).map((g) => html`<option value=${g}>${g}</option>`)}</select></label>
-      <label>Objects <select value=${all ? 'all' : 'watch'} onChange=${(e) => setAll(e.target.value === 'all')}>
-        <option value="watch">watch list</option><option value="all">all in group</option></select></label>
-      <label>Next <select value=${hours} onChange=${(e) => setHours(Number(e.target.value))}>
-        ${[6, 12, 24, 48].map((h) => html`<option value=${h}>${h} h</option>`)}</select></label>
-      <label>Max el ≥ <select value=${minEl} onChange=${(e) => setMinEl(Number(e.target.value))}>
-        ${[0, 20, 30, 45, 60].map((d) => html`<option value=${d}>${d}°</option>`)}</select></label>
+      <label>CelesTrak group <${Select} value=${group} onChange=${setGroup}
+        options=${(hello?.tle_groups || ['stations']).map((g) => [g, g])} /></label>
+      <label>Objects <${Select} value=${all ? 'all' : 'watch'} onChange=${(v) => setAll(v === 'all')} options=${OBJECT_OPTS} /></label>
+      <label>Next <${Select} value=${hours} onChange=${setHours} options=${HOURS_OPTS} /></label>
+      <label>Max el ≥ <${Select} value=${minEl} onChange=${setMinEl} options=${MINEL_OPTS} /></label>
+      <label>Lighting <${Select} value=${lighting} onChange=${setLighting} options=${LIGHT_OPTS}
+        title="sunlit: the satellite is in sunlight for part of the pass; dark sky: and the Sun is below −6° at culmination" /></label>
       <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
     </div>
     ${!all && html`<div class="toolbar">
@@ -309,7 +314,7 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
       <label style="display:flex;gap:6px;align-items:center">Add
         <input list="tle-names" placeholder=${`object in '${group}'…`} aria-label="Add an object to the watch list"
           onChange=${(e) => { addName(e.target.value.trim()); e.target.value = ''; }} /></label>
-      <datalist id="tle-names">${groupNames.map((n) => html`<option value=${n} />`)}</datalist>
+      <datalist id="tle-names">${nameOpts}</datalist>
     </div>`}
     ${clockBad && html`<div class="clockwarn" role="status">
       <span><b>Clock not good enough for satellites:</b> ${clk < 0 ? 'error unknown (chrony not answering)'
@@ -323,11 +328,11 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
       <button class="btn primary" onClick=${() => { setTracked(''); setScreen('track'); }}>Open the Track screen →</button></div>`}
     <span class="small">${note}${rows.length ? ' · click a pass to preview it' + (all ? ' and plan it' : '') : ''}</span>
     <div class="tablewrap"><table>
-      <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>
+      <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th title="share of the pass with the satellite sunlit; hover a value for the Sun's elevation">Sunlit</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>
       <tbody class="mono">
-        ${!rows.length && html`<tr class="empty"><td colspan="7">${busy ? 'Searching…' : html`No passes. ${note}
+        ${!rows.length && html`<tr class="empty"><td colspan="8">${busy ? 'Searching…' : html`No passes. ${note}
           <br /><span class="muted">${all ? 'Try a longer window or a lower Max el.'
-            : 'Watch takes names or parts of names from the group (e.g. ISS, HUBBLE, NOAA 19) or catalog numbers (25544), comma separated.'}</span>`}</td></tr>`}
+            : (lighting !== 'any' ? 'Try Lighting: any, or a longer window. ' : '') + 'Watch takes names or parts of names from the group (e.g. ISS, HUBBLE, NOAA 19) or catalog numbers (25544), comma separated.'}</span>`}</td></tr>`}
         ${rows.map((p) => {
           const chosen = p.chosen || {};
           const current = status?.tle_line1 && status.tle_line1 === p.line1 && status?.plan?.start_ns && Number(status.plan.start_ns) >= Number(p.rise_ns) - 5e9 && Number(status.plan.start_ns) <= Number(p.set_ns);
@@ -343,6 +348,8 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
             <td>${utc(p.rise_ns)}</td>
             <td>${dur((Number(p.set_ns) - Number(p.rise_ns)) / 1e9)}</td>
             <td>${Number(p.max_el_deg).toFixed(1)}°</td>
+            <td title=${p.sun_el_deg != null ? `Sun ${Number(p.sun_el_deg).toFixed(0)}° at max el` : ''}
+              class=${p.sun_el_deg != null && p.sun_el_deg > -6 ? 'muted' : ''}>${p.sunlit_frac == null ? '?' : p.sunlit_frac > 0 ? `${Math.round(p.sunlit_frac * 100)}%${p.sun_el_deg > -6 ? ' ☀' : ''}` : '—'}</td>
             <td>${plan}</td>
             <td>${chosen.mode ? Number(chosen.peak_az_deg_s).toFixed(2) + ' °/s' : '—'}</td>
             <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${p.planned !== false && !chosen.mode} onClick=${(e) => { e.stopPropagation(); track(p); }}>Track</button>`}</td>

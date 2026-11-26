@@ -291,6 +291,14 @@ def test_passes_all_in_group_and_plan_on_demand(stack):
                 assert watch["ok"] and watch["data"]["passes"] and all(x["planned"] for x in watch["data"]["passes"])
                 assert {x["name"] for x in watch["data"]["passes"]} == {"ISS TWIN"} and "NOPE" in watch["message"]
 
+                # Lighting: every row says how much of the pass is sunlit and where the Sun is.
+                assert all(0 <= x["sunlit_frac"] <= 1 and -90 <= x["sun_el_deg"] <= 90 for x in rows)
+                lit = (await req(6, "passes", {**base, "lighting": "sunlit"}))["data"]["passes"]
+                dark = (await req(7, "passes", {**base, "lighting": "dark_sky"}))["data"]["passes"]
+                assert all(x["sunlit_frac"] > 0 for x in lit) and len(lit) == sum(x["sunlit_frac"] > 0 for x in rows)
+                assert all(x["sunlit_frac"] > 0 and x["sun_el_deg"] < -6 for x in dark) and len(dark) <= len(lit)
+                assert not (await req(8, "passes", {**base, "lighting": "bogus"}))["ok"]
+
                 big = await req(5, "passes", {**base, "group": "starlink"})
                 assert not big["ok"] and "too many" in big["message"]
         finally:

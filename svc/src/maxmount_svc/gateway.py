@@ -88,6 +88,13 @@ def _match_names(sats: dict, terms: list[str]):
     return out, notes
 
 
+def _lit_enough(row: dict, lighting: str) -> bool:
+    if lighting == "any":
+        return True
+    lit = (row.get("sunlit_frac") or 0) > 0
+    return lit and (lighting == "sunlit" or (row["sun_el_deg"] is not None and row["sun_el_deg"] < -6))
+
+
 def _merge_docked(rows: list[dict]) -> list[dict]:
     """Objects docked together (ISS modules, CSS modules) have separate element sets with the
     same passes; keep one row (lowest catalog number) and list the others in 'also'."""
@@ -439,6 +446,9 @@ class Gateway:
         more than ALL_MAX objects are refused.
         min_max_el_deg: keep passes that culminate at least this high.
         start_ns: search from this time instead of now (tests; planning ahead).
+        lighting: "any" (default), "sunlit" (the satellite is sunlit for part of the pass) or
+            "dark_sky" (sunlit, with the Sun below -6 deg at the site at culmination).
+        Each row gets sunlit_frac (0..1) and sun_el_deg (at culmination).
         """
         group = args.get("group", "stations")
         hours = float(args.get("hours", 12))
@@ -486,13 +496,18 @@ class Gateway:
                     d = _msg_to_dict(p)
                     d.update(name=name, line1=tle[0], line2=tle[1], planned=True)
                     rows.append(d)
+        lighting = args.get("lighting", "any")
+        if lighting not in ("any", "sunlit", "dark_sky"):
+            return False, f"unknown lighting filter '{lighting}'", None
+        rows = [r for r in rows if self._add_lighting(r) and _lit_enough(r, lighting)]
         rows = _merge_docked(rows)
         rows.sort(key=lambda r: int(r["rise_ns"]))
         shown = rows[:PASS_ROWS_MAX]
         what = f"{len(sats)} objects in '{group}'" if args.get("all") else (
             f"watching {', '.join(chosen)}" if chosen else "no watched objects")
         msg = f"{len(rows)} passes in {hours:g} h ({what}"
-        msg += f", max el ≥ {min_max_el:g}°)" if min_max_el > 0 else ")"
+        msg += f", max el ≥ {min_max_el:g}°" if min_max_el > 0 else ""
+        msg += {"any": ")", "sunlit": ", sunlit)", "dark_sky": ", sunlit in a dark sky)"}[lighting]
         if len(rows) > len(shown):
             msg += f"; showing the first {len(shown)}"
         msg += f"; TLEs {note}"
@@ -501,6 +516,23 @@ class Gateway:
         if missing:
             msg += f"; nothing in '{group}' matches: {', '.join(missing)}"
         return True, msg, {"passes": shown, "names": sorted(sats)}
+
+    def _add_lighting(self, row: dict) -> bool:
+        """Adds sunlit_frac (fraction of the pass with the satellite in sunlight, 10 s steps)
+        and sun_el_deg (the Sun's elevation at the site at culmination). Always True."""
+        if self.settings.site is None:
+            row["sunlit_frac"] = row["sun_el_deg"] = None
+            return True
+        rise, set_, culm = int(row["rise_ns"]), int(row["set_ns"]), int(row["culmination_ns"])
+        try:
+            sat = SatelliteTarget(self.settings.site, row["line1"], row["line2"])
+            lit = sat.sunlit(np.linspace(rise, set_, max(2, (set_ - rise) // (10 * NS) + 1)).astype(np.int64))
+            row["sunlit_frac"] = round(float(np.mean(lit)), 3)
+        except (ValueError, SgpError):
+            row["sunlit_frac"] = None
+        _az, el = astro.sun_observed(np.int64(culm), self.settings.site)
+        row["sun_el_deg"] = round(float(np.degrees(el)), 1)
+        return True
 
     def _svc_passes(self, name: str, tle: tuple[str, str], start_ns: int, hours: float):
         req = mpb.PassesRequest(tle=mpb.Tle(name=name, line1=tle[0], line2=tle[1]), hours=hours, start_ns=start_ns)

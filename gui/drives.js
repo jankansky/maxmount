@@ -5,6 +5,7 @@
 // through mount-svc, which owns the trajectory stream.
 import { html, useState, useEffect, useRef } from './vendor/preact-htm-standalone.module.js';
 import { drawStrip, cssVar } from './lib/charts.js';
+import { Select } from './lib/ui.js';
 
 // ---- decoding -------------------------------------------------------------------------------
 const LADDER = ['NOT_READY_TO_SWITCH_ON', 'SWITCH_ON_DISABLED', 'READY_TO_SWITCH_ON', 'SWITCHED_ON', 'OPERATION_ENABLED'];
@@ -142,10 +143,8 @@ function Jog({ cfg, a, send, svcBusy, hardware, tripped }) {
     ${hardware && html`<label class="arm"><input type="checkbox" checked=${armed} disabled=${!a || !cfg.commissioned} onChange=${(e) => setArmed(e.target.checked)} />
       Arm motion: I can see the mount and the path and cables are clear</label>`}
     <div class="toolbar">
-      <label>Step <select value=${step} onChange=${(e) => setStep(Number(e.target.value))}>
-        ${STEPS.map((s) => html`<option value=${s}>${s}°</option>`)}</select></label>
-      <label>Speed <select value=${speed} onChange=${(e) => setSpeed(Number(e.target.value))}>
-        ${speeds.map((s) => html`<option value=${s}>${s} °/s</option>`)}</select></label>
+      <label>Step <${Select} value=${step} onChange=${setStep} options=${STEPS.map((s) => [s, `${s}°`])} /></label>
+      <label>Speed <${Select} value=${speed} onChange=${setSpeed} options=${speeds.map((s) => [s, `${s} °/s`])} /></label>
     </div>
     <div class="grid2">
       <button class="btn" disabled=${!!why} onClick=${() => go({ by_deg: -step })} aria-label=${`Jog ${cfg.name} minus ${step} degrees`}>− ${step}°</button>

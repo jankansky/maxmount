@@ -35,6 +35,10 @@ it, **Drives** (`#drives`).
   - **Watch** takes names, parts of names (`ISS`, `noaa 19`) or catalog numbers (`25544`),
     comma separated; **Add** picks names from the group. Docked modules with the same passes
     (ISS, CSS) are merged into one row (`+1`).
+  - **Lighting:** *sunlit* keeps passes where the satellite is in sunlight for part of the
+    pass; *sunlit, dark sky* also needs the Sun below −6° at culmination. The **Sunlit** column
+    gives the sunlit share of each pass (☀: the sky is still bright); hover for the Sun's
+    elevation.
   - **Max el ≥** hides low passes. Changing a selector searches again; after editing Watch,
     press Enter or **Refresh**. An empty list says why.
   - Click a pass (or select it and press Enter) to preview it; click it again or press
@@ -93,6 +97,10 @@ For commissioning and maintenance.
 - **Event log:** state changes, faults and trips seen by this browser.
 
 ## Implementation
+
+Dropdowns use `Select` (`lib/ui.js`), which builds its options once: the GUI re-renders about
+ten times a second, and rebuilding the options each time closed or reset an open dropdown.
+
 
 - **No build step:** plain ES modules plus [Preact](https://preactjs.com) and
   [htm](https://github.com/developit/htm). The pinned standalone bundle,
