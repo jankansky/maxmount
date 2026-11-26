@@ -50,6 +50,14 @@ message Stop {
 // Commissioning: move one mechanical axis (axis frame, no pointing model or sky limits;
 // the axis soft limits apply), then hold it enabled. Enables the axis if needed. Refused
 // while a target is active or another jog is moving.
+// An aircraft from the local ADS-B receiver (config adsb.source), tracked from its latest
+// position extrapolated along its ground track; updated as new positions arrive. The mount
+// holds if the position goes stale (adsb.max_age_s).
+message TrackAircraft {
+  string icao = 1;              // ICAO 24-bit address, hex (readsb "hex")
+  double duration_s = 2;        // 0 = until it drops below the horizon mask or adsb.max_track_s
+}
+
 message JogAxis {
   string axis = 1;
   double by_deg = 2;            // relative move, or
@@ -67,6 +75,7 @@ message TargetCommand {
     Offsets set_offsets = 4;
     Stop stop = 5;
     JogAxis jog_axis = 6;
+    TrackAircraft track_aircraft = 7;
   }
   bool allow_clock_error = 10;  // satellites: track even if chrony's error bound is too large
 }
@@ -123,7 +132,7 @@ message ServiceStatus {
   int64 t_ns = 1;
   ServiceState state = 2;
   string target_name = 3;
-  string target_kind = 4;       // radec | tle | altaz | jog
+  string target_kind = 4;       // radec | tle | altaz | jog | aircraft
   PlanSummary plan = 5;
   Offsets offsets = 6;
   string message = 7;           // last event or error
@@ -147,6 +156,7 @@ message ServiceStatus {
   bool sunlit = 22;             // satellite outside the Earth's shadow
   string tle_line1 = 23;        // satellite targets: the element set in use
   string tle_line2 = 24;
+  string aircraft_icao = 25;    // the tracked aircraft (target_kind aircraft)
 }
 
 message SkyPoint {

@@ -265,8 +265,7 @@ function useClockGate(status, hello) {
 function ListTabs({ tab, setTab }) {
   const t = (id, label) => html`<button role="tab" class=${tab === id ? 'on' : ''} aria-selected=${tab === id} onClick=${() => setTab(id)}>${label}</button>`;
   return html`<div class="tabs" role="tablist">
-    ${t('passes', 'Upcoming passes')}${t('conj', 'Conjunctions (SOCRATES)')}
-    <button role="tab" disabled title="not built yet">Aircraft (ADS-B)</button>
+    ${t('passes', 'Upcoming passes')}${t('conj', 'Conjunctions (SOCRATES)')}${t('air', 'Aircraft (ADS-B)')}
   </div>`;
 }
 
@@ -398,6 +397,112 @@ const conjName = (n) => {
   return m ? html`${m[1]} <span class="muted" title=${STATUS[m[2]] || ''}>[${m[2]}]</span>` : n;
 };
 
+const AIR_RANGE = [25, 50, 100, 200].map((r) => [r, `${r} km`]);
+const AIR_SHOW = [['up', 'above the mask now'], ['soon', 'up now or within 15 min'], ['all', 'any elevation']];
+// Time to closest approach; 0 means it is already flying away.
+const fmtIn = (s) => { const t = Math.round(s); return t <= 1 ? 'receding' : `in ${Math.floor(t / 60)}:${pad(t % 60)}`; };
+const feet = (m) => `${Math.round(m / 0.3048).toLocaleString('en-US')} ft`;
+
+// Aircraft from the local ADS-B receiver, refreshed every 2 s while the tab is shown. ask: a
+// request that does not write to the status line.
+function Aircraft({ ask, send, status, connected, active, setAirView, setScreen, tab, setTab, mask }) {
+  const [range, setRange] = useState(loadPref('air_range', 100));
+  const [show, setShow] = useState(loadPref('air_show', 'soon'));
+  const [sel, setSel] = useState('');
+  const [rows, setRows] = useState([]);
+  const [ok, setOk] = useState(true);
+  const [note, setNote] = useState('');
+  const [tracked, setTracked] = useState('');
+  const [kick, setKick] = useState(0);
+  const selRef = useRef(sel);
+  selRef.current = sel;
+  useEffect(() => {
+    if (!active || !connected) return undefined;
+    savePref('air_range', range); savePref('air_show', show);
+    let live = true;
+    const poll = async () => {
+      const r = await ask('aircraft', { max_range_km: Number(range), show, selected: selRef.current });
+      if (!live) return;
+      setOk(r.ok); setNote(r.message);
+      const d = r.data || { aircraft: [] };
+      setRows(d.aircraft);
+      setAirView({ ...d, sel: selRef.current, range: Number(range) });
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => { live = false; clearInterval(id); };
+  }, [active, connected, range, show, kick]);
+  const pick = (icao) => { setSel((s) => (s === icao ? '' : icao)); setKick((k) => k + 1); };
+  const track = async (a) => {
+    const r = await send('target', { track_aircraft: { icao: a.icao } });
+    setNote(r.message);
+    if (r.ok) setTracked(a.label);
+  };
+  const trackedIcao = status?.target_kind === 'aircraft' ? status.aircraft_icao : '';
+  return html`<section class="panel" aria-label="Aircraft" hidden=${tab !== 'air'}>
+    <${ListTabs} tab=${tab} setTab=${setTab} />
+    <div class="toolbar">
+      <label>Within <${Select} aria-label="Aircraft range" value=${range} onChange=${setRange} options=${AIR_RANGE} /></label>
+      <label>Show <${Select} aria-label="Which aircraft" value=${show} onChange=${setShow} options=${AIR_SHOW} /></label>
+      <span class="small">updates every 2 s</span>
+    </div>
+    <${GoTrack} tracked=${tracked} setTracked=${setTracked} status=${status} setScreen=${setScreen} />
+    <span class="small">${note}${rows.length ? ' · click an aircraft to see its trail and predicted path' : ''}</span>
+    ${!ok && html`<p class="small muted">The Aircraft tab reads a local 1090 MHz receiver (an RTL-SDR with readsb or dump1090;
+      see <code>adsb.source</code> in the system file). To try it without one, run
+      <code>mount-svc --system …/system.yaml adsb-sim</code> on the Pi.</p>`}
+    <div class="tablewrap"><table>
+      <thead><tr><th>Aircraft</th><th>Altitude</th><th>Range</th><th>El / az</th><th title="angular rate across the sky now">Rate</th>
+        <th title="closest approach on its current track (straight line, next 15 min)">Closest</th><th title="highest elevation on its current track">Max el</th>
+        <th title="seconds since the last position">Age</th><th></th></tr></thead>
+      <tbody class="mono">
+        ${!rows.length && html`<tr class="empty"><td colspan="9">${ok ? 'No aircraft match. Try a larger range or Show: any elevation.' : 'No ADS-B data.'}</td></tr>`}
+        ${rows.map((a) => {
+          const isSel = sel === a.icao, below = a.el_deg < mask;
+          return html`<tr class=${(isSel ? 'selected ' : '') + (trackedIcao === a.icao ? 'current' : '')} tabindex="0" aria-selected=${isSel}
+            onClick=${() => pick(a.icao)} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(a.icao); } }}>
+            <td style="font-family:inherit">${a.label}${a.type ? html` <span class="muted">${a.type}</span>` : ''}</td>
+            <td title=${`${Math.round(a.alt_m)} m (${a.alt_source === 'geom' ? 'GNSS' : 'pressure'})`}>${feet(a.alt_m)}${a.alt_source === 'baro' ? '*' : ''}</td>
+            <td>${Number(a.range_km).toFixed(1)} km</td>
+            <td class=${below ? 'muted' : ''}>${Math.round(a.el_deg)}° / ${Math.round(a.az_deg)}°</td>
+            <td>${Number(a.rate_deg_s).toFixed(2)}°/s</td>
+            <td>${fmtIn(a.cpa_in_s)} · ${Number(a.cpa_km).toFixed(1)} km</td>
+            <td class=${a.max_el_deg < mask ? 'muted' : ''}>${Math.round(a.max_el_deg)}°</td>
+            <td class=${a.age_s > 5 ? 'warn' : ''}>${Number(a.age_s).toFixed(0)}</td>
+            <td>${trackedIcao === a.icao ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${a.max_el_deg < mask}
+              onClick=${(e) => { e.stopPropagation(); track(a); }}>Track</button>`}</td>
+          </tr>`;
+        })}
+      </tbody>
+    </table></div>
+    <span class="small">* pressure altitude (no GNSS height): can be a few hundred feet off, ~1° at 10 km.</span>
+  </section>`;
+}
+
+function AircraftDetail({ air }) {
+  const a = air?.sel && air.aircraft.find((x) => x.icao === air.sel);
+  if (!a) {
+    return html`<section class="panel" aria-label="Aircraft details"><div class="head"><h2>Aircraft</h2></div>
+      <p class="small">Click an aircraft to see its trail and predicted path on the map and sky, and its closest approach.
+      Predictions assume it keeps flying straight at its current speed and climb rate.</p></section>`;
+  }
+  const row = (k, v) => html`<tr><th>${k}</th><td>${v}</td></tr>`;
+  return html`<section class="panel" aria-label="Aircraft details">
+    <div class="head"><h2>${a.label}</h2><span class="small">${[a.type, a.reg].filter(Boolean).join(' · ')}</span></div>
+    <table class="kv mono"><tbody>
+      ${row('ICAO', `${a.icao.toUpperCase()}${a.squawk ? ` · squawk ${a.squawk}` : ''}${a.category ? ` · ${a.category}` : ''}`)}
+      ${row('Altitude', `${feet(a.alt_m)} (${Math.round(a.alt_m)} m, ${a.alt_source === 'geom' ? 'GNSS' : 'pressure'})`)}
+      ${row('Speed', `${Math.round(a.gs_m_s / 0.514444)} kt · track ${Math.round(a.track_deg)}° · ${a.vrate_m_s >= 0 ? '+' : ''}${Math.round(a.vrate_m_s / 0.3048 * 60)} ft/min`)}
+      ${row('Now', `${Number(a.range_km).toFixed(1)} km · el ${Number(a.el_deg).toFixed(1)}° az ${Number(a.az_deg).toFixed(1)}° · ${Number(a.rate_deg_s).toFixed(2)}°/s`)}
+      ${row('Closest', `${fmtIn(a.cpa_in_s)} · ${Number(a.cpa_km).toFixed(2)} km at el ${a.cpa_el_deg}°`)}
+      ${row('Highest', `${a.max_el_deg}° · fastest ${Number(a.max_rate_deg_s).toFixed(2)}°/s`)}
+      ${row('Position', `${Number(a.age_s).toFixed(1)} s old`)}
+    </tbody></table>
+    <p class="small"><b>Track</b> follows each new position (extrapolated along its track) and holds the mount if
+      positions stop for longer than <code>adsb.max_age_s</code>. Turns are not predicted.</p>
+  </section>`;
+}
+
 function Conjunctions({ hello, send, status, connected, preview, setConjPreview, setScreen, tab, setTab }) {
   const [hours, setHours] = useState(loadPref('cj_hours', 48));
   const [maxRange, setMaxRange] = useState(loadPref('cj_range', 1));
@@ -506,9 +611,25 @@ function SkyPanel({ status, tel, hello, track, land }) {
 }
 
 // Passes screen: large ground track and sky views of the selected pass (or the live target).
-function PassViews({ status, tel, hello, track, land, preview }) {
+function PassViews({ status, tel, hello, track, land, preview, air }) {
   const mapRef = useRef(null), skyRef = useRef(null);
   useEffect(() => {
+    if (air) {
+      const sel = air.selected && air.selected.icao === air.sel ? air.selected : null;
+      if (mapRef.current) drawMap(mapRef.current, { land, now: new Date(), air: { site: air.site, radius_km: air.range,
+        items: air.aircraft.map((a) => ({ lon: a.lon, lat: a.lat, track_deg: a.track_deg, label: a.label, sel: a.icao === air.sel })),
+        trail: sel?.trail, path: sel?.path } });
+      if (skyRef.current) drawSky(skyRef.current, {
+        maskEl: hello?.tracking?.horizon_min_el_deg ?? 10,
+        path: (status?.path || []).map((p) => [Number(p.az_deg), Number(p.el_deg)]),
+        target: status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
+        mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
+        sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
+        points: air.aircraft.map((a) => ({ az: a.az_deg, el: a.el_deg, label: a.label, sel: a.icao === air.sel })),
+        preview: sel?.sky || null, labels: ['', '+10 min'], // the path starts at the aircraft's own dot
+      });
+      return;
+    }
     // A preview shows day and night at the pass's highest point; otherwise now.
     const when = preview ? new Date(Number(preview.row.culmination_ns) / 1e6) : new Date();
     if (mapRef.current) drawMap(mapRef.current, { land, track: preview?.ground || (status?.tle_line1 ? track : null), now: when });
@@ -526,16 +647,17 @@ function PassViews({ status, tel, hello, track, land, preview }) {
   const conj = preview?.kind === 'conj';
   return html`<div class="pv-views">
     <section class="panel" aria-label="Ground track">
-      <div class="head"><h2>Ground track</h2><span class="small">${preview ? preview.row.name : status?.tle_line1 ? status.target_name + ' (live)' : ''}</span></div>
+      <div class="head"><h2>${air ? 'Aircraft' : 'Ground track'}</h2><span class="small">${air ? `within ${air.range} km` : preview ? preview.row.name : status?.tle_line1 ? status.target_name + ' (live)' : ''}</span></div>
       <canvas ref=${mapRef} role="img" aria-label="Map: ground track, visibility circle, site"></canvas>
-      <span class="small">${preview ? `Thick: above the horizon mask, AOS to LOS · thin: 15 min either side · circle: visible at culmination · triangle: site · shading: day, civil / nautical / astronomical twilight and night at ${utc(preview.row.culmination_ns)} UTC (max el)`
+      <span class="small">${air ? 'Arrows: aircraft along their track · selected: trail (solid) and the next 10 min if it flies straight (dashed) · rings: 10/25/50/100 km · triangle: site'
+        : preview ? `Thick: above the horizon mask, AOS to LOS · thin: 15 min either side · circle: visible at culmination · triangle: site · shading: day, civil / nautical / astronomical twilight and night at ${utc(preview.row.culmination_ns)} UTC (max el)`
         : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask'
         : 'Select a pass in the table to see its ground track.'}</span>
     </section>
     <section class="panel" aria-label="Sky">
       <div class="head"><h2>Sky</h2></div>
       <canvas ref=${skyRef} role="img" aria-label="Sky dome: pass path, mount, target, horizon mask"></canvas>
-      <span class="small">North up, east left · selected pass: solid where sunlit, dotted in shadow${conj ? ' · thin: the other object · ✕: closest approach' : ''} · dashed: tracking plan · ring: mount</span>
+      <span class="small">${air ? 'North up, east left · dots: aircraft now · selected: the next 10 min if it flies straight · dashed: tracking plan · ring: mount' : html`North up, east left · selected pass: solid where sunlit, dotted in shadow${conj ? ' · thin: the other object · ✕: closest approach' : ''} · dashed: tracking plan · ring: mount`}</span>
     </section></div>`;
 }
 
@@ -565,7 +687,8 @@ function ConjDetail({ preview, clearPreview }) {
   </section>`;
 }
 
-function PassDetail({ preview, status, clearPreview }) {
+function PassDetail({ preview, status, clearPreview, air }) {
+  if (air) return html`<${AircraftDetail} air=${air} />`;
   if (preview?.kind === 'conj') return html`<${ConjDetail} preview=${preview} clearPreview=${clearPreview} />`;
   if (!preview) {
     return html`<section class="panel" aria-label="Pass details"><div class="head"><h2>Pass</h2></div>
@@ -746,6 +869,8 @@ function App() {
     return pv;
   }, [send]);
   const [listTab, setListTabState] = useState(loadPref('listtab', 'passes'));
+  const [airView, setAirView] = useState(null);
+  const ask = useCallback((op, args) => link.current.request(op, args), []);
   const setListTab = (t) => { setListTabState(t); savePref('listtab', t); setPreviewState(null); previewReq.current = null; };
   const updatePreviewRow = useCallback((row) => setPreviewState((pv) => (pv && pv.key === passKey(row) ? { ...pv, row } : pv)), []);
   const openDialog = () => dialogRef.current?.showModal();
@@ -758,15 +883,18 @@ function App() {
         history=${history.current} now=${now} events=${events.current} faults=${faults.current} />
     </div>
     <div class="passes-screen" hidden=${screen !== 'passes'}>
-      <${PassViews} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} preview=${preview} />
+      <${PassViews} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} preview=${preview}
+        air=${listTab === 'air' ? airView : null} />
       <div class="pv-lower">
         <div class="pv-lists">
           <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview}
             updatePreviewRow=${updatePreviewRow} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} />
           <${Conjunctions} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview}
             setConjPreview=${setConjPreview} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} />
+          <${Aircraft} ask=${ask} send=${send} status=${status} connected=${connected} active=${screen === 'passes' && listTab === 'air'}
+            setAirView=${setAirView} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} mask=${hello?.tracking?.horizon_min_el_deg ?? 10} />
         </div>
-        <${PassDetail} preview=${preview} status=${status} clearPreview=${() => setPreview(null)} />
+        <${PassDetail} preview=${preview} status=${status} clearPreview=${() => setPreview(null)} air=${listTab === 'air' ? airView : null} />
       </div>
     </div>
     <div class="layout" hidden=${screen !== 'track'}>

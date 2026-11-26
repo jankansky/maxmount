@@ -84,7 +84,9 @@ export function drawStrip(canvas, { series, now_s, span_s = 60, unit = '', minTo
 // preview: [[az, el, sunlit], ...] for a pass being looked at (solid where sunlit, dotted in shadow).
 // preview2: a second object's path (conjunctions), thinner and in the accent colour.
 // mark: [az, el] of an event (the time of closest approach), drawn as a cross.
-export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount = null, sun = null, preview = null, preview2 = null, mark = null }) {
+// points: [{ az, el, label, sel }] (aircraft); labels: the preview's two end labels.
+export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount = null, sun = null, preview = null, preview2 = null, mark = null,
+  points = null, labels = ['AOS', 'LOS'] }) {
   const { ctx, w, h } = setup(canvas, 1);
   const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 18;
   const P = (az, el) => {
@@ -122,7 +124,8 @@ export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount =
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     }
     ctx.setLineDash([]);
-    endLabels(ctx, P(...preview[0]), P(...preview[preview.length - 1]), cssVar('--accent2'));
+    const vis = preview.filter((q) => q[1] >= -1);
+    if (vis.length > 1) endLabels(ctx, P(...vis[0]), P(...vis[vis.length - 1]), cssVar('--accent2'), labels);
   }
   if (preview2 && preview2.length > 1) {
     ctx.strokeStyle = cssVar('--accent'); ctx.lineWidth = 1.5;
@@ -136,6 +139,16 @@ export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount =
     ctx.stroke();
   }
   if (mark) cross(ctx, P(mark[0], mark[1]), cssVar('--text'));
+  if (points) {
+    ctx.font = SANS; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    for (const p of [...points].sort((a, b) => a.sel - b.sel)) {
+      if (p.el < -1) continue;
+      const [x, y] = P(p.az, p.el);
+      ctx.fillStyle = p.sel ? cssVar('--accent2') : cssVar('--accent');
+      ctx.beginPath(); ctx.arc(x, y, p.sel ? 5 : 3.5, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = p.sel ? cssVar('--text') : cssVar('--muted'); ctx.fillText(p.label, x + 7, y);
+    }
+  }
   if (sun && sun[1] > -2) {
     const [x, y] = P(sun[0], sun[1]); ctx.fillStyle = cssVar('--sun'); ctx.beginPath(); ctx.arc(x, y, 7, 0, 2 * Math.PI); ctx.fill();
   }
@@ -150,6 +163,41 @@ export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount =
   }
 }
 
+// Aircraft layer: range rings around the site, the selected aircraft's trail (solid) and
+// predicted path (dashed), each aircraft as an arrow along its track, and the site.
+function drawAir(ctx, air, X, Y, w) {
+  const [slon, slat] = air.site;
+  const pxPerDeg = X(slon + 1) - X(slon);
+  ctx.strokeStyle = cssVar('--grid'); ctx.fillStyle = cssVar('--muted'); ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.font = SANS; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  for (const r of [10, 25, 50, 100, 200].filter((r) => r <= air.radius_km * 1.4)) {
+    const ry = (r / 111.2) * pxPerDeg, rx = ry / Math.cos(slat * DEG);
+    ctx.beginPath(); ctx.ellipse(X(slon), Y(slat), rx, ry, 0, 0, 2 * Math.PI); ctx.stroke();
+    ctx.fillText(`${r} km`, X(slon) + 3, Y(slat) - ry - 1);
+  }
+  ctx.setLineDash([]);
+  const acc2 = cssVar('--accent2');
+  const line = (pts, dash) => {
+    if (!pts || pts.length < 2) return;
+    ctx.strokeStyle = acc2; ctx.lineWidth = dash ? 1.5 : 2; ctx.setLineDash(dash ? [6, 5] : []);
+    ctx.beginPath(); pts.forEach(([lo, la], i) => (i ? ctx.lineTo(X(lo), Y(la)) : ctx.moveTo(X(lo), Y(la)))); ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  line(air.trail, false); line(air.path, true);
+  ctx.textBaseline = 'middle';
+  for (const it of [...air.items].sort((a, b) => a.sel - b.sel)) {
+    const x = X(it.lon), y = Y(it.lat);
+    if (x < -20 || x > w + 20) continue;
+    const c = it.sel ? acc2 : cssVar('--accent'), s = it.sel ? 8 : 6;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(it.track_deg * DEG);
+    ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(0, -s); ctx.lineTo(s * 0.7, s); ctx.lineTo(0, s * 0.5); ctx.lineTo(-s * 0.7, s); ctx.closePath(); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = it.sel ? cssVar('--text') : cssVar('--muted'); ctx.fillText(it.label, x + 10, y);
+  }
+  ctx.fillStyle = cssVar('--warn'); const [sx, sy] = [X(slon), Y(slat)];
+  ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5, sy + 4); ctx.lineTo(sx - 5, sy + 4); ctx.closePath(); ctx.fill();
+}
+
 // An event marker: a cross with a ring, labelled TCA.
 function cross(ctx, [x, y], color) {
   ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
@@ -159,13 +207,14 @@ function cross(ctx, [x, y], color) {
 }
 
 // AOS (open circle) and LOS (filled circle) markers with labels.
-function endLabels(ctx, [ax, ay], [lx, ly], color) {
+function endLabels(ctx, [ax, ay], [lx, ly], color, labels = ['AOS', 'LOS']) {
   ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(ax, ay, 5, 0, 2 * Math.PI); ctx.stroke();
   ctx.beginPath(); ctx.arc(lx, ly, 5, 0, 2 * Math.PI); ctx.fill();
   ctx.font = SANS; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillStyle = cssVar('--text');
-  ctx.fillText('AOS', ax + 8, ay); ctx.fillText('LOS', lx + 8, ly);
+  if (labels[0]) ctx.fillText(labels[0], ax + 8, ay);
+  if (labels[1]) ctx.fillText(labels[1], lx + 8, ly);
 }
 
 // Sun-altitude bands: day, civil (0 to -6), nautical (-6 to -12), astronomical (-12 to -18)
@@ -238,7 +287,10 @@ const wrap180 = (d) => ((((d % 360) + 540) % 360) - 180);
 
 // World map (plate carree). A pass preview (track.aos set) is unwrapped around the site and
 // zoomed to fit the pass; a live target's track is shown on the whole world.
-export function drawMap(canvas, { land = null, track = null, now = new Date() }) {
+// air: aircraft mode, centred on the site: { site: [lon, lat], radius_km, items: [{ lon, lat,
+// track_deg, label, sel }], trail: [[lon, lat]], path: [[lon, lat]] } (trail and predicted path
+// of the selected aircraft).
+export function drawMap(canvas, { land = null, track = null, now = new Date(), air = null }) {
   const { ctx, w, h } = setup(canvas, 0.5);
   const pv = !!track?.aos;
   let pts = track?.points || [];
@@ -259,6 +311,11 @@ export function drawMap(canvas, { land = null, track = null, now = new Date() })
     span = Math.min(360, Math.max(40, l1 - l0, 2 * (b1 - b0)));
     lon0 = (l0 + l1) / 2 - span / 2;
     top = Math.min(90, Math.max(-90 + span / 2, (b0 + b1) / 2 + span / 4));
+  }
+  if (air) {
+    site = air.site;
+    const latSpan = (2 * air.radius_km) / 111.2;
+    span = 2 * latSpan; lon0 = site[0] - span / 2; top = site[1] + latSpan / 2;
   }
   const X = (lon) => ((lon - lon0) / span) * w, Y = (lat) => ((top - lat) / (span / 2)) * h;
   // World copies needed to cover the view.
@@ -294,24 +351,26 @@ export function drawMap(canvas, { land = null, track = null, now = new Date() })
       ctx.beginPath(); ctx.moveTo(x + 8 * c, y + 8 * d); ctx.lineTo(x + 11 * c, y + 11 * d); ctx.stroke();
     }
   }
-  // Graticule (30 deg on the world view, 10 deg zoomed in).
-  const step = span > 120 ? 30 : 10;
+  // Graticule, spaced to suit the zoom.
+  const step = span > 120 ? 30 : span > 40 ? 10 : span > 15 ? 5 : span > 6 ? 2 : span > 2.5 ? 1 : 0.5;
   ctx.strokeStyle = cssVar('--grid'); ctx.lineWidth = 1;
   for (let lon = Math.ceil(lon0 / step) * step; lon < lon0 + span; lon += step) {
     if (span > 120 && Math.abs(wrap180(lon)) === 180) continue;
     ctx.beginPath(); ctx.moveTo(Math.round(X(lon)) + 0.5, 0); ctx.lineTo(Math.round(X(lon)) + 0.5, h); ctx.stroke();
   }
-  for (let lat = -90 + step; lat < 90; lat += step) {
+  for (let lat = Math.ceil((top - span / 2) / step) * step; lat < top && lat < 90; lat += step) {
     if (span > 120 && Math.abs(lat) === 90) continue;
     ctx.beginPath(); ctx.moveTo(0, Math.round(Y(lat)) + 0.5); ctx.lineTo(w, Math.round(Y(lat)) + 0.5); ctx.stroke();
   }
   if (span <= 120) {
+    const ls = step >= 10 ? 20 : step * 2, dp = ls < 1 ? 1 : 0;
     ctx.fillStyle = cssVar('--muted'); ctx.font = SANS; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-    for (let lon = Math.ceil(lon0 / 20) * 20; lon < lon0 + span; lon += 20) {
-      const v = wrap180(lon); ctx.fillText(`${Math.abs(v)}°${v < 0 ? 'W' : v > 0 && v < 180 ? 'E' : ''}`, X(lon) + 3, h - 14);
+    for (let lon = Math.ceil(lon0 / ls) * ls; lon < lon0 + span; lon += ls) {
+      const v = wrap180(lon); ctx.fillText(`${Math.abs(v).toFixed(dp)}°${v < 0 ? 'W' : v > 0 && v < 180 ? 'E' : ''}`, X(lon) + 3, h - 14);
     }
-    for (let lat = -80; lat <= 80; lat += 20) if (Y(lat) > 10 && Y(lat) < h - 20) ctx.fillText(`${Math.abs(lat)}°${lat < 0 ? 'S' : lat > 0 ? 'N' : ''}`, 3, Y(lat) + 2);
+    for (let lat = Math.ceil((top - span / 2) / ls) * ls; lat <= 80 && lat < top; lat += ls) if (Y(lat) > 10 && Y(lat) < h - 20) ctx.fillText(`${Math.abs(lat).toFixed(dp)}°${lat < 0 ? 'S' : lat > 0 ? 'N' : ''}`, 3, Y(lat) + 2);
   }
+  if (air) { drawAir(ctx, air, X, Y, w); return; }
   if (!track) return;
   // Live target: flag 0 = flown (solid), 1 = upcoming (dashed). Pass preview:
   // flag 1 = above the horizon mask (thick, solid), 0 = before/after the pass (thin, dashed).

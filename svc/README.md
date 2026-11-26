@@ -29,6 +29,7 @@ SYS=config/systems/sim-altaz/system.yaml
 build/rt/mount-rt --system $SYS --serve &                       # simulated mount
 svc/.venv/bin/mount-svc --system $SYS passes --tle iss.tle      # passes and plans, no mount needed
 svc/.venv/bin/mount-svc --system $SYS track-tle --tle iss.tle   # wait for the next pass and track it
+svc/.venv/bin/mount-svc --system $SYS adsb-sim                   # simulated ADS-B traffic at adsb.source (no receiver)
 svc/.venv/bin/mount-svc --system $SYS track-radec --ra 06:45:08.9 --dec -16:42:58 --minutes 10
 svc/.venv/bin/mount-svc --system $SYS goto --az 180 --el 45
 ```

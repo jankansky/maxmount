@@ -298,6 +298,22 @@ def cmd_gui(args, sys_: SystemSettings) -> int:
     return 0
 
 
+def cmd_adsb_sim(args, sys_: SystemSettings) -> int:
+    from . import adsb
+
+    site = _need_site(sys_)
+    out = args.out or sys_.adsb.source
+    if out.startswith(("http://", "https://")):
+        print("mount-svc: adsb.source is a URL; give --out PATH", file=sys.stderr)
+        return 1
+    print(f"writing {args.aircraft} simulated aircraft around the site to {out} once a second; Ctrl-C to stop")
+    stop = []
+    signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    adsb.run_simulator(site, out, n=args.aircraft, seed=args.seed, stop=lambda: bool(stop))
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="mount-svc", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--system", required=True, help="config/systems/<name>/system.yaml")
@@ -343,6 +359,12 @@ def main(argv=None) -> int:
     p.add_argument("--park-az", type=float, default=0.0, help="park azimuth, deg")
     p.add_argument("--park-el", type=float, default=45.0, help="park elevation, deg")
     p.set_defaults(func=cmd_gui)
+
+    p = sub.add_parser("adsb-sim", help="write simulated ADS-B traffic (readsb aircraft.json) for testing without a receiver")
+    p.add_argument("--out", help="file to write (default: adsb.source from the system file)")
+    p.add_argument("--aircraft", type=int, default=8)
+    p.add_argument("--seed", type=int, default=1)
+    p.set_defaults(func=cmd_adsb_sim)
 
     p = sub.add_parser("request", help="send a request to a running 'mount-svc serve'")
     rs = p.add_subparsers(dest="what", required=True)

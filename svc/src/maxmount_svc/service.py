@@ -23,7 +23,7 @@ from concurrent.futures import Future
 
 import numpy as np
 
-from . import clock, planner, tracker
+from . import adsb, clock, planner, tracker
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .planner import NS, Plan
@@ -99,6 +99,8 @@ class MountService:
         self._jog: dict | None = None  # axis, name, end_ns while a jog moves
         self._clock: clock.ClockStatus | None = None
         self._clock_checked = 0.0
+        self._stop_note: dict[int, str] = {}  # why a track was stopped from inside (per generation)
+        self._adsb = adsb.AdsbSource(settings.adsb.source)
 
     # -- lifecycle ---------------------------------------------------------------------------
     def start(self) -> None:
@@ -249,6 +251,57 @@ class MountService:
             raise Rejected(_rejection(plans))
         return target, "tle", best, True
 
+    def _plan_track_aircraft(self, a, _allow_clock):
+        """An aircraft from the local ADS-B receiver: planned along its current straight-line
+        extrapolation while it is above the horizon mask (at most duration_s or
+        adsb.max_track_s); a feeder thread then follows each new position (_aircraft_feed)."""
+        tr, cfg = self.settings.tracking, self.settings.adsb
+        ac = self._adsb.get(a.icao.strip())
+        if ac is None:
+            raise Rejected(f"aircraft {a.icao or '?'} not in the ADS-B data ({self._adsb.note})")
+        age = (time.time_ns() - ac.t_pos_ns) / NS
+        if age > cfg.max_age_s:
+            raise Rejected(f"{ac.label}: last position {age:.0f} s old (limit {cfg.max_age_s:.0f} s)")
+        target = adsb.AircraftTarget(self.settings.site, ac)
+        t0 = time.time_ns() + 2 * NS
+        span = min(a.duration_s or cfg.max_track_s, cfg.max_track_s)
+        up = planner.find_passes(target, t0, t0 + int(span * NS), tr.horizon_min_el_deg * DEG, step_s=1.0)
+        if not up or up[0].rise_ns > t0 + 30 * NS:
+            raise Rejected(f"{ac.label} is below the {tr.horizon_min_el_deg:.0f} deg horizon"
+                           + (f" (rises in {(up[0].rise_ns - t0) / NS:.0f} s)" if up else ""))
+        end = up[0].set_ns - NS
+        if end - max(t0, up[0].rise_ns) < 5 * NS:
+            raise Rejected(f"{ac.label} is above the horizon for under 5 s")
+        best, plans = self._make_plan(target, max(t0, up[0].rise_ns), end, ("normal", "flipped", "over_the_top"), step_s=0.5)
+        if best is None:
+            raise Rejected(_rejection(plans))
+        return target, "aircraft", best, False  # hold at the end: the next aircraft is often close
+
+    def _aircraft_feed(self, gen: int, target, control) -> None:
+        """Follows a tracked aircraft: each new ADS-B position replaces the extrapolation and
+        re-sends the buffered trajectory; a stale position holds the mount."""
+        max_age = self.settings.adsb.max_age_s
+        while not self._closing.wait(0.25):
+            with self._lock:
+                if gen != self._gen or self._control is not control:
+                    return
+            if control.stop_reason():
+                return
+            ac = self._adsb.get(target.aircraft.icao)
+            if ac is not None and ac.t_pos_ns > target.aircraft.t_pos_ns:
+                target.update(ac)
+                control.request_resend()
+                path = self._sky_path(target, self._plan)
+                with self._lock:
+                    if gen == self._gen:
+                        self._path = path
+            age = (time.time_ns() - target.aircraft.t_pos_ns) / NS
+            if age > max_age:
+                with self._lock:
+                    self._stop_note[gen] = f": ADS-B position of {target.name} is {age:.0f} s old, holding"
+                control.stop("hold")
+                return
+
     def _plan_goto_altaz(self, a, _allow_clock):
         target = FixedTarget(a.az_deg * DEG, a.el_deg * DEG, name=a.name or f"az {a.az_deg:.2f} el {a.el_deg:.2f}")
         t0 = time.time_ns() + 2 * NS
@@ -301,6 +354,9 @@ class MountService:
                 target=self._run_worker, args=(gen, plan, control, disable_after), daemon=True, name=f"track-{gen}"
             )
             self._worker.start()
+            if kind == "aircraft":
+                threading.Thread(target=self._aircraft_feed, args=(gen, target, control), daemon=True,
+                                 name=f"adsb-{gen}").start()
 
     def _on_phase(self, gen: int, phase: str) -> None:
         with self._lock:
@@ -313,7 +369,7 @@ class MountService:
             stats = tracker.track(self.client, plan, self.settings.tracking, disable_after, control=control)
             message = f"finished; max |cmd - act| {np.degrees(stats['max_cmd_act_rad']) * 3600:.1f} arcsec"
         except tracker.TrackStopped as e:
-            message = f"stopped ({e.reason})"
+            message = f"stopped ({e.reason})" + self._stop_note.pop(gen, "")
             if e.reason == "retarget":
                 return  # the next track reports from here on
         except (tracker.TrackAborted, MountError) as e:
@@ -497,6 +553,12 @@ class MountService:
                     st.range_km, st.range_rate_km_s, st.altitude_km = g["range_km"], g["range_rate_km_s"], g["altitude_km"]
                     st.sunlit = bool(target.sunlit(np.int64(now))[0])
                     st.tle_line1, st.tle_line2 = target.line1, target.line2
+                elif isinstance(target, adsb.AircraftTarget):
+                    enu = target.enu_m(t2)
+                    rng = np.linalg.norm(enu, axis=-1) / 1000
+                    st.range_km, st.range_rate_km_s = float(rng[0]), float((rng[1] - rng[0]) / 0.5)
+                    st.altitude_km = target.aircraft.alt_m / 1000
+                    st.aircraft_icao = target.aircraft.icao
             except Exception:  # noqa: BLE001 - status must not fail
                 pass
         return st

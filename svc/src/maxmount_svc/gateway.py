@@ -18,6 +18,7 @@ WebSocket messages (JSON):
           passes {group, names | all, hours, min_max_el_deg}, pass_plan {name, line1, line2, rise_ns, set_ns},
           pass_preview {name, line1, line2, rise_ns, culmination_ns, set_ns} (ground track + sky path),
           conjunctions {hours, max_range_km, lighting, max_mag, coorbiting} (SOCRATES, visible from the site),
+          aircraft {max_range_km, show, selected} (local ADS-B receiver: list, map, sky, the selected one's path),
           conjunction_detail {cat1, cat2, primary, tca_ns} (both paths, separation, the pass to track),
           enable/disable {axis} and fault_reset (straight to mount-rt),
           jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
@@ -38,7 +39,7 @@ import numpy as np
 from aiohttp import WSMsgType, web
 from google.protobuf import json_format
 
-from . import astro, kinematics, planner, satcat, socrates
+from . import adsb, astro, kinematics, planner, satcat, socrates
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .proto import mpb
@@ -161,6 +162,7 @@ class Gateway:
         self.tles = TleCache()
         self.satcat = satcat.SatCatalog()
         self.socrates = socrates.Socrates()
+        self.adsb = adsb.AdsbSource(settings.adsb.source)
         self.clients: set[web.WebSocketResponse] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.client: MountClient | None = None
@@ -438,6 +440,8 @@ class Gateway:
             return True, f"{len(sats)} objects ({note})", {"names": sorted(sats)}
         if op == "passes":
             return self._passes(args)
+        if op == "aircraft":
+            return self._aircraft(args)
         if op == "conjunctions":
             return self._conjunctions(args)
         if op == "conjunction_detail":
@@ -589,6 +593,62 @@ class Gateway:
             k = int(np.argmin(mag))
             row["peak_mag"], row["peak_mag_ns"] = round(float(mag[k]), 1), str(int(t[k]))
         return True
+
+    # -- ADS-B aircraft --------------------------------------------------------------------------
+    def _aircraft(self, args: dict):
+        """Aircraft from the local ADS-B receiver within max_range_km (horizontal) of the site,
+        extrapolated to now, with their closest approach over the next 15 min of straight
+        flight. show: "up" (above the horizon mask now), "soon" (now or within 15 min) or "all".
+        selected: an ICAO address; adds its trail and predicted path for the map and sky."""
+        site = self.settings.site
+        if site is None:
+            return False, "no site location", None
+        max_range = float(args.get("max_range_km", 100))
+        show = args.get("show", "soon")
+        mask = self.settings.tracking.horizon_min_el_deg
+        now = time.time_ns()
+        rows, sel_detail = [], None
+        selected = str(args.get("selected") or "").lower()
+        for icao, a in self.adsb.aircraft().items():
+            tgt = adsb.AircraftTarget(site, a)
+            enu = tgt.enu_m(np.array([now, now + NS], dtype=np.int64))
+            horiz_km = float(np.hypot(enu[0, 0], enu[0, 1])) / 1000
+            if horiz_km > max_range and icao != selected:
+                continue
+            rng = np.linalg.norm(enu, axis=-1)
+            u = enu / rng[:, None]
+            az, el = astro.enu_to_azel(enu[0])
+            ca = adsb.closest_approach(tgt, now)
+            el_deg, max_el = math.degrees(el), math.degrees(ca["max_el_rad"])
+            if icao != selected and ((show == "up" and el_deg < mask) or (show == "soon" and max_el < mask)):
+                continue
+            lon, lat, _h = tgt.lonlat(np.int64(now))
+            rows.append({
+                "icao": icao, "label": a.label, "flight": a.flight, "reg": a.reg, "type": a.type, "squawk": a.squawk,
+                "category": a.category, "alt_m": round(a.alt_m), "alt_source": a.alt_source, "gs_m_s": round(a.gs_m_s, 1),
+                "track_deg": a.track_deg, "vrate_m_s": round(a.vrate_m_s, 1), "age_s": round((now - a.t_pos_ns) / NS, 1),
+                "lon": round(float(lon[0]), 5), "lat": round(float(lat[0]), 5), "range_km": round(float(rng[0]) / 1000, 2),
+                "horiz_km": round(horiz_km, 2), "az_deg": round(math.degrees(az), 2), "el_deg": round(el_deg, 2),
+                "rate_deg_s": round(math.degrees(math.acos(min(1.0, float(u[0] @ u[1])))), 3),
+                "cpa_in_s": round((ca["t_ns"] - now) / NS), "cpa_km": round(ca["range_m"] / 1000, 2),
+                "cpa_el_deg": round(math.degrees(ca["el_rad"]), 1), "max_el_deg": round(max_el, 1),
+                "max_rate_deg_s": round(math.degrees(ca["max_rate_rad_s"]), 3),
+            })
+            if icao == selected:
+                t = np.arange(now, now + 600 * NS + 1, 5 * NS, dtype=np.int64)
+                plon, plat, _ = tgt.lonlat(t)
+                paz, pel = tgt.observed(t)
+                sel_detail = {
+                    "icao": icao,
+                    "trail": [[round(lo, 5), round(la, 5)] for _t, la, lo, _alt in a.trail],
+                    "path": [[round(float(x), 5), round(float(y), 5)] for x, y in zip(plon, plat)],
+                    "sky": [[round(math.degrees(x), 2), round(math.degrees(y), 2), 1] for x, y in zip(paz, pel)],
+                }
+        rows.sort(key=lambda r: r["range_km"])
+        what = {"up": "above the horizon mask", "soon": "up now or within 15 min", "all": "any elevation"}.get(show, show)
+        msg = f"{len(rows)} aircraft within {max_range:g} km, {what}; {self.adsb.note}"
+        return self.adsb.ok, msg, {"aircraft": rows, "site": [site.longitude_deg, site.latitude_deg],
+                                   "selected": sel_detail, "mask_deg": mask}
 
     # -- SOCRATES conjunctions ------------------------------------------------------------------
     def _active_tles(self) -> dict[str, tuple[str, str, str]]:

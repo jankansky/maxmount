@@ -51,6 +51,13 @@ tracking:
   point_rate_hz: 20
   lookahead_s: 5
 
+# ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
+# 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.
+adsb:
+  source: /run/readsb/aircraft.json   # or http://<host>/tar1090/data/aircraft.json on the LAN
+  max_age_s: 10                       # hold the mount if the tracked aircraft's position is older
+  max_track_s: 600
+
 # Zenoh bridge (needs mount-rt built with -DMAXMOUNT_WITH_ZENOH=ON). Keys: maxmount/<site>/mount/...
 zenoh:
   site: lab

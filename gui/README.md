@@ -71,6 +71,20 @@ it, **Drives** (`#drives`).
   - **Track** follows the object with an element set in the CelesTrak `active` group
     (usually the active payload) through the pass that contains TCA.
   - The gateway downloads the SOCRATES CSV (~20 MB) at most once per SOCRATES run (8 h).
+- **Aircraft (ADS-B)** tab: aircraft from a local 1090 MHz receiver (readsb or dump1090
+  `aircraft.json`, `adsb.source` in the system file; nothing comes from the internet),
+  refreshed every 2 s.
+  - **Within** (horizontal range) and **Show** (above the mask now, up now or within 15 min,
+    any elevation) filter the list. Columns: altitude (* = pressure altitude), range,
+    elevation/azimuth and angular rate now, the closest approach and highest elevation on its
+    current straight-line track, and the position's age.
+  - The map (centred on the site, with 10–100 km rings) and sky show every aircraft; clicking
+    one adds its trail and the next 10 minutes if it flies straight, and a details card.
+  - **Track** asks `mount-svc` to follow it (`track_aircraft`): planned along the current
+    extrapolation, then updated with every new position; the mount holds if positions stop
+    for longer than `adsb.max_age_s`.
+  - Without a receiver, `mount-svc --system … adsb-sim` writes simulated traffic to
+    `adsb.source`.
 - **Pass details:** AOS, culmination and LOS times and directions, duration, lighting, the
   chosen plan and its peak rates, or why no plan fits.
 

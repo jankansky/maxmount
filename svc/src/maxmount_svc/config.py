@@ -59,6 +59,15 @@ class ZenohSettings:
 
 
 @dataclass
+class AdsbSettings:
+    # readsb/dump1090 aircraft.json: a path, or an http(s) URL on the local network
+    # (e.g. tar1090's http://host/tar1090/data/aircraft.json).
+    source: str = "/run/readsb/aircraft.json"
+    max_age_s: float = 10.0     # hold the mount if a tracked aircraft's position is older
+    max_track_s: float = 600.0  # longest aircraft track before re-planning is needed
+
+
+@dataclass
 class SystemSettings:
     name: str
     backend: str
@@ -73,6 +82,7 @@ class SystemSettings:
     # scaling, limits in degrees and the drive descriptor's vendor/model/error register.
     axes_info: list[dict] = field(default_factory=list)
     fieldbus: dict = field(default_factory=dict)
+    adsb: AdsbSettings = field(default_factory=AdsbSettings)
 
 
 class ConfigError(RuntimeError):
@@ -189,4 +199,6 @@ def load_system(path: str | Path) -> SystemSettings:
         pointing_file=pointing_file,
         axes_info=_axes_info(doc, path.resolve().parent.parent.parent / "drives"),
         fieldbus=dict(doc.get("fieldbus") or {}),
+        adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
+                             for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),
     )

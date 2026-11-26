@@ -263,3 +263,56 @@ def test_conjunctions_tab(gui_url, monkeypatch, served):  # noqa: F811
         assert page.locator("[aria-label=Passes]").is_visible() and not conj.is_visible()
         browser.close()
     assert not errors, errors
+
+
+def test_aircraft_tab(gui_url, monkeypatch, served, tmp_path):  # noqa: F811
+    """The Aircraft tab with simulated ADS-B traffic: the list refreshes, a click selects an
+    aircraft and shows its details, and the map and sky draw without errors."""
+    import threading
+
+    from maxmount_svc import adsb
+
+    _client, settings = served
+    path = tmp_path / "aircraft.json"
+    stop = threading.Event()
+    sim = threading.Thread(target=adsb.run_simulator, args=(settings.site, str(path)),
+                           kwargs={"n": 12, "period_s": 0.5, "stop": stop.is_set}, daemon=True)
+    sim.start()
+    orig = Gateway._aircraft
+
+    def aircraft(self, args):
+        if self.adsb.source != str(path):
+            self.adsb = adsb.AdsbSource(str(path))
+        return orig(self, args)
+
+    monkeypatch.setattr(Gateway, "_aircraft", aircraft)
+    errors = []
+    try:
+        with playwright.sync_playwright() as pw:
+            try:
+                browser = pw.chromium.launch()
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"no Chromium for Playwright: {e}")
+            page = browser.new_page(viewport={"width": 1440, "height": 1000})
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+            page.goto(gui_url + "#passes")
+            page.get_by_role("tab", name="Aircraft (ADS-B)").first.click()
+            panel = page.locator("[aria-label=Aircraft]")
+            panel.get_by_label("Which aircraft").select_option("all")
+            panel.get_by_label("Aircraft range").select_option("200")
+            rows = panel.locator("tbody tr:not(.empty)")
+            rows.first.wait_for(timeout=15000)
+            assert "SIM" in rows.first.text_content()
+            rows.first.click()
+            page.wait_for_selector("[aria-label='Aircraft details'] table.kv", timeout=10000)
+            assert "ICAO" in page.locator("[aria-label='Aircraft details']").text_content()
+            page.get_by_text("Arrows: aircraft along their track").wait_for(timeout=5000)
+            page.wait_for_timeout(2500)  # a couple of refreshes keep the selection
+            assert rows.locator("[aria-selected=true]").count() == 0 and panel.locator("tr.selected").count() == 1
+            page.get_by_role("tab", name="Upcoming passes").first.click()
+            assert page.locator("[aria-label=Passes]").is_visible()
+            browser.close()
+    finally:
+        stop.set()
+    assert not errors, errors

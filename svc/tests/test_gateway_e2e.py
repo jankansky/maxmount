@@ -391,3 +391,50 @@ def test_conjunctions_and_detail(stack):
             await gw.stop()
 
     asyncio.run(run())
+
+
+def test_aircraft_list_and_selection(stack, tmp_path):
+    """The Aircraft tab's data: simulated readsb output, extrapolated to now, with closest
+    approach; the selected aircraft gets its trail and predicted path; no receiver is reported."""
+    import time
+
+    from maxmount_svc import adsb
+
+    settings = stack
+    path = tmp_path / "aircraft.json"
+    port = 18000 + __import__("random").randint(9901, 11800)
+
+    async def run():
+        gw = await _session(settings, port)
+        gw.adsb = adsb.AdsbSource(str(path), min_interval_s=0)
+        try:
+            async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                async def req(i, op, args):
+                    await ws.send_str(json.dumps({"type": "request", "id": i, "op": op, "args": args}))
+                    return await _recv_until(ws, lambda m: m["type"] == "reply" and m["id"] == i)
+
+                r = await req(1, "aircraft", {})
+                assert not r["ok"] and "no ADS-B data" in r["message"] and r["data"]["aircraft"] == []
+                t = time.time()
+                for k in (0, 1):  # two updates so there is a trail
+                    path.write_text(json.dumps(adsb.simulate(settings.site, t + k, n=12)))
+                    r = await req(2 + k, "aircraft", {"show": "all", "max_range_km": 200})
+                assert r["ok"], r
+                rows = r["data"]["aircraft"]
+                assert rows and [x["range_km"] for x in rows] == sorted(x["range_km"] for x in rows)
+                a = rows[0]
+                for k in ("icao", "label", "alt_m", "az_deg", "el_deg", "rate_deg_s", "cpa_in_s", "cpa_km", "max_el_deg", "age_s"):
+                    assert k in a
+                assert a["label"].startswith("SIM") and a["type"] == "A320" and a["horiz_km"] <= 200
+                assert a["cpa_km"] <= a["range_km"] + 1e-6 and r["data"]["selected"] is None
+                near = await req(4, "aircraft", {"show": "all", "max_range_km": 25})
+                assert all(x["horiz_km"] <= 25 for x in near["data"]["aircraft"])
+                up = await req(5, "aircraft", {"show": "up", "max_range_km": 200})
+                assert all(x["el_deg"] >= settings.tracking.horizon_min_el_deg for x in up["data"]["aircraft"])
+                r = await req(6, "aircraft", {"show": "all", "max_range_km": 200, "selected": a["icao"]})
+                sel = r["data"]["selected"]
+                assert sel["icao"] == a["icao"] and len(sel["trail"]) == 2 and len(sel["path"]) == 121 and len(sel["sky"]) == 121
+        finally:
+            await gw.stop()
+
+    asyncio.run(run())
