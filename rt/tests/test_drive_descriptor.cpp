@@ -132,9 +132,16 @@ TEST(DriveDescriptorYaml, RepositoryDescriptorsLoad) {
     EXPECT_EQ(ipos.product_code, 0x019F418Du);
     EXPECT_EQ(PdoCodec(ipos).output_size(), 7u);
     EXPECT_EQ(PdoCodec(ipos).input_size(), 21u);
+    ASSERT_TRUE(ipos.error_register.has_value());
+    EXPECT_EQ(ipos.error_register->index, 0x2000);
+    EXPECT_EQ(ipos.error_register->size, 2u);
+    EXPECT_EQ(ipos.error_register->decode, "technosoft_mer");
 
     const auto sim = config::load_drive_descriptor(MAXMOUNT_CONFIG_DIR "/drives/sim_cia402.yaml");
     EXPECT_FALSE(sim.configure_pdo_mapping);
+    EXPECT_FALSE(sim.error_register.has_value());
+    EXPECT_THROW(config::parse_drive_descriptor("diagnostics: {error_register: {index: 0x2000, size: 5}}"),
+                 std::runtime_error);
 }
 
 TEST(PdoCodec, DecodesFollowingErrorAndDigitalInputs) {

@@ -79,6 +79,7 @@ TEST(BridgeCodec, EncodesTelemetryAndBatches) {
     s.axes[1].flags = axis_flags::FollowingErrorTrip;
     s.axes[1].following_error = -7;
     s.axes[1].digital_inputs = 0x80000004u;
+    s.axes[1].vendor_error = 0x0108u;
 
     const LoopSnapshot loop{1000, 2, 25'000};
     mpb::MountTelemetry m;
@@ -94,6 +95,7 @@ TEST(BridgeCodec, EncodesTelemetryAndBatches) {
     EXPECT_EQ(m.axes(1).flags(), axis_flags::FollowingErrorTrip);
     EXPECT_EQ(m.axes(1).following_error_counts(), -7);
     EXPECT_EQ(m.axes(1).digital_inputs(), 0x80000004u);
+    EXPECT_EQ(m.axes(1).vendor_error_register(), 0x0108u);
 
     BatchEncoder b(kAxes);
     b.add(s);

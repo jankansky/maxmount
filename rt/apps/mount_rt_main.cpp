@@ -411,6 +411,13 @@ private:
                                         loop_->stats().max_wake_latency_ns.load()};
 #endif
         while (auto s = controller_->poll_telemetry()) {
+            // Fault diagnostics read by SDO (below) ride along with telemetry while the
+            // drive stays in Fault.
+            for (std::size_t i = 0; i < s->n_axes; ++i) {
+                if (s->axes[i].state != cia402::State::Fault) continue;
+                if (s->axes[i].error_code == 0) s->axes[i].error_code = fault_code_[i];
+                s->axes[i].vendor_error = fault_vendor_[i];
+            }
 #if defined(MAXMOUNT_HAVE_ZENOH)
             if (bridge_) bridge_->on_telemetry(*s, loop);
 #endif
@@ -428,16 +435,30 @@ private:
             const bool fault = last_.axes[i].state == cia402::State::Fault;
             if (fault && !fault_reported_[i]) {
                 fault_reported_[i] = true;
-                const auto code = bus_->read_sdo(i, 0x603F, 0, 2);
+                const auto code = last_.axes[i].error_code ? std::optional<std::uint32_t>(last_.axes[i].error_code)
+                                                           : bus_->read_sdo(i, 0x603F, 0, 2);
+                fault_code_[i] = code ? static_cast<std::uint16_t>(*code) : 0;
                 if (code) {
-                    std::printf("!! %s: drive fault, error code 0x%04X (%s)\n", sys_.axes[i].axis.name.c_str(),
+                    std::printf("!! %s: drive fault, error code 0x%04X (%s)", sys_.axes[i].axis.name.c_str(),
                                 *code, error_class(static_cast<std::uint16_t>(*code)));
                 } else {
-                    std::printf("!! %s: drive fault (error code could not be read)\n",
-                                sys_.axes[i].axis.name.c_str());
+                    std::printf("!! %s: drive fault (error code could not be read)", sys_.axes[i].axis.name.c_str());
                 }
+                fault_vendor_[i] = 0;
+                if (const auto& er = sys_.axes[i].descriptor.error_register) {
+                    if (const auto v = bus_->read_sdo(i, er->index, er->subindex, er->size)) {
+                        fault_vendor_[i] = *v;
+                        std::printf(", %s 0x%0*X", er->name.empty() ? "error register" : er->name.c_str(),
+                                    2 * er->size, *v);
+                    }
+                }
+                std::printf("\n");
             }
-            if (!fault) fault_reported_[i] = false;
+            if (!fault) {
+                fault_reported_[i] = false;
+                fault_code_[i] = 0;
+                fault_vendor_[i] = 0;
+            }
         }
         if (last_.tripped && !trip_reported_) {
             trip_reported_ = true;
@@ -723,6 +744,8 @@ private:
     std::uint64_t stale_ = 0;
     std::array<double, kMaxAxes> prev_cmd_{}, max_err_{};
     std::array<bool, kMaxAxes> fault_reported_{};
+    std::array<std::uint16_t, kMaxAxes> fault_code_{};
+    std::array<std::uint32_t, kMaxAxes> fault_vendor_{};
     bool trip_reported_ = false;
 };
 

@@ -136,6 +136,17 @@ DriveDescriptor parse_drive_descriptor(const std::string& yaml_text) {
                 d.startup_sdo.push_back(w);
             }
         }
+        if (const auto diag = root["diagnostics"]; diag && diag["error_register"]) {
+            const auto r = diag["error_register"];
+            ErrorRegister er;
+            er.index = to_uint<std::uint16_t>(r["index"], "diagnostics.error_register.index");
+            er.subindex = r["sub"] ? to_uint<std::uint8_t>(r["sub"], "diagnostics.error_register.sub") : 0;
+            er.size = r["size"] ? to_uint<std::uint8_t>(r["size"], "diagnostics.error_register.size") : 2;
+            if (er.size < 1 || er.size > 4) fail("diagnostics.error_register.size must be 1..4 bytes");
+            er.name = r["name"] ? r["name"].as<std::string>() : "";
+            er.decode = r["decode"] ? r["decode"].as<std::string>() : "";
+            d.error_register = er;
+        }
     } catch (const YAML::Exception& e) {
         fail(std::string("bad value: ") + e.what());
     }

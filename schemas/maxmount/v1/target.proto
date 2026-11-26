@@ -45,6 +45,18 @@ message Stop {
   bool keep_enabled = 1;        // hold position instead of disabling the drives
 }
 
+// Commissioning: move one mechanical axis (axis frame, no pointing model or sky limits;
+// the axis soft limits apply), then hold it enabled. Enables the axis if needed. Refused
+// while a target is active or another jog is moving.
+message JogAxis {
+  string axis = 1;
+  double by_deg = 2;            // relative move, or
+  double to_deg = 3;            // absolute axis position when absolute = true
+  bool absolute = 4;
+  double vel_deg_s = 5;         // 0 = 1 deg/s; capped by the axis limit
+  double acc_deg_s2 = 6;        // 0 = 2 deg/s^2; capped by the axis limit
+}
+
 message TargetCommand {
   oneof command {
     RaDec track_radec = 1;
@@ -52,6 +64,7 @@ message TargetCommand {
     AltAz goto_altaz = 3;
     Offsets set_offsets = 4;
     Stop stop = 5;
+    JogAxis jog_axis = 6;
   }
   bool allow_clock_error = 10;  // satellites: track even if chrony's error bound is too large
 }
@@ -108,7 +121,7 @@ message ServiceStatus {
   int64 t_ns = 1;
   ServiceState state = 2;
   string target_name = 3;
-  string target_kind = 4;       // radec | tle | altaz
+  string target_kind = 4;       // radec | tle | altaz | jog
   PlanSummary plan = 5;
   Offsets offsets = 6;
   string message = 7;           // last event or error

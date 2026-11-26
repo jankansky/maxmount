@@ -104,3 +104,38 @@ dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
 .reply { font-size: 12px; padding: 8px; border-radius: 6px; background: var(--chip); }
 .reply.bad { background: var(--warn-bg); color: var(--warn); }
 .offline { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); background: var(--stop); color: var(--stop-text); padding: 8px 16px; border-radius: 8px; font-weight: 600; }
+
+/* ---- Drives screen ---- */
+[hidden] { display: none !important; }
+.drives { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.panel h3 { margin: 4px 0 0; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.cols { display: flex; flex-wrap: wrap; gap: 16px; }
+.cols .col { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.cols .col.actions { justify-content: flex-start; }
+.axis { flex: 1 1 560px; }
+.axisname { font-size: 18px; font-weight: 700; margin-right: 6px; }
+.badge { padding: 4px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); font-size: 12px; font-weight: 600; }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.bad { background: var(--stop); color: var(--stop-text); }
+.ladder { display: flex; flex-wrap: wrap; gap: 4px; }
+.ladder .step { flex: 1 1 90px; text-align: center; padding: 5px 6px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.ladder .step.cur { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.ladder .step.fault.cur { background: var(--stop); border-color: var(--stop); color: var(--stop-text); }
+.bits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 8px; font-size: 11px; }
+.rangebar .track { position: relative; height: 10px; border-radius: 5px; background: var(--bg); border: 1px solid var(--line); margin-top: 4px; }
+.rangebar .track span { position: absolute; top: -3px; width: 2px; height: 14px; transform: translateX(-1px); }
+.rangebar .zero { background: var(--grid); }
+.rangebar .cmd { background: var(--accent2); }
+.rangebar .act { background: var(--accent); width: 4px !important; transform: translateX(-2px) !important; }
+.rangebar .ends { display: flex; justify-content: space-between; margin-top: 2px; }
+.faultbox { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 6px; background: var(--chip); }
+.faultbox.active { background: var(--warn-bg); color: var(--warn); }
+.faultbox .head { display: flex; justify-content: space-between; align-items: center; }
+.bitlist { margin: 0; padding-left: 16px; font-size: 12px; }
+.jog { display: flex; flex-direction: column; gap: 8px; }
+.jog .arm { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--warn); }
+.jog .arm input { min-height: 0; margin-top: 2px; }
+.eventlog { max-height: 220px; overflow-y: auto; font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+.eventlog .t { color: var(--muted); margin-right: 6px; }
+.eventlog .bad { color: var(--warn); }

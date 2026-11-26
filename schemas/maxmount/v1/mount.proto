@@ -79,13 +79,17 @@ message AxisTelemetry {
   double act_position_rad = 4;
   DriveState state = 5;
   uint32 statusword = 6;
-  uint32 error_code = 7;
+  uint32 error_code = 7;                // 0x603F; read by SDO while the drive is in Fault
+                                        // when the drive cannot map it into a PDO
   // bit0 limited, bit1 starved, bit2 holding, bit3 before-start,
   // bit4 this axis caused a following-error trip
   uint32 flags = 8;
   uint32 buffered_points = 9;
   int32 following_error_counts = 10;  // drive-reported (0x60F4), if mapped
   uint32 digital_inputs = 11;         // raw 0x60FD, if mapped
+  // Drive descriptor's diagnostics.error_register (e.g. Technosoft MER), read by SDO while
+  // the drive is in Fault; 0 otherwise.
+  uint32 vendor_error_register = 12;
 }
 
 message LoopStats {

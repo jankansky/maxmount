@@ -55,6 +55,7 @@ void fill(pb::MountTelemetry& m, const TelemetrySample& s, const std::vector<std
         p->set_state(to_pb(a.state));
         p->set_statusword(a.statusword);
         p->set_error_code(a.error_code);
+        p->set_vendor_error_register(a.vendor_error);
         p->set_flags(a.flags);
         p->set_buffered_points(a.buffered);
         p->set_following_error_counts(a.following_error);

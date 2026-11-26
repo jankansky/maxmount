@@ -3,7 +3,7 @@
 
 Keys under maxmount/<site>/ (schemas/zenoh-keys.md, messages in schemas/maxmount/v1/target.proto):
 
-    svc/target   query   TargetCommand -> TargetReply   track, go to, offsets, stop
+    svc/target   query   TargetCommand -> TargetReply   track, go to, offsets, stop, jog
     svc/passes   query   PassesRequest -> PassesReply   upcoming passes of a TLE with plans
     svc/status   pub     ServiceStatus, 2 Hz
 
@@ -92,6 +92,7 @@ class MountService:
         self._control: tracker.TrackControl | None = None
         self._worker: threading.Thread | None = None
         self._path: list = []
+        self._jog: dict | None = None  # axis, name, end_ns while a jog moves
         self._clock: clock.ClockStatus | None = None
         self._clock_checked = 0.0
 
@@ -172,6 +173,8 @@ class MountService:
             return self._set_offsets(cmd.set_offsets)
         if which == "stop":
             return self._stop(cmd.stop.keep_enabled)
+        if which == "jog_axis":
+            return self._jog_axis(cmd.jog_axis)
         target, kind, plan, disable_after = getattr(self, f"_plan_{which}")(getattr(cmd, which), cmd.allow_clock_error)
         self._start_track(target, kind, plan, disable_after)
         return mpb.TargetReply(accepted=True, message=f"{plan.mode} plan for {target.name}", plan=plan_summary(plan))
@@ -279,6 +282,7 @@ class MountService:
             control = tracker.TrackControl(on_phase=lambda phase: self._on_phase(gen, phase))
             control.set_axis_offsets(d_az, d_el)
             self._target, self._target_kind, self._plan = target, kind, plan
+            self._jog = None
             self._path = path
             self._state, self._message = "slewing", f"planned {plan.mode} for {target.name}"
             self._control = control
@@ -329,16 +333,91 @@ class MountService:
             control.stop("hold" if keep_enabled else "stop")
             if worker:
                 worker.join(timeout=10)
-        elif not keep_enabled:
+        else:
             try:
-                self.client.disable()
+                if keep_enabled:
+                    self.client.clear_trajectory()  # e.g. a jog: decelerate and hold
+                else:
+                    self.client.disable()
             except MountError as e:
                 raise Rejected(str(e)) from None
         with self._lock:
             self._state, self._message = "idle", "stopped (holding)" if keep_enabled else "stopped"
             self._target, self._plan, self._control = None, None, None
+            self._target_kind, self._jog = "", None
             self._path = []
         return mpb.TargetReply(accepted=True, message="stopped")
+
+    # -- commissioning -----------------------------------------------------------------------
+    def _jog_axis(self, j) -> mpb.TargetReply:
+        """A rest-to-rest move of one axis, streamed in one go; the axis then holds."""
+        with self._lock:
+            if self._control is not None:
+                raise Rejected("a target is active: stop or hold it first")
+            if self._jog is not None and time.time_ns() < self._jog["end_ns"]:
+                raise Rejected(f"{self._jog['axis']} is still moving")
+        lim = {"az": self.settings.az, "el": self.settings.el}.get(j.axis)
+        if lim is None:
+            raise Rejected(f"unknown axis '{j.axis}'")
+        if not j.absolute and j.by_deg == 0:
+            raise Rejected("jog by 0 deg")
+        vel, acc = (j.vel_deg_s or 1.0) * DEG, (j.acc_deg_s2 or 2.0) * DEG
+        if not (vel > 0 and acc > 0):
+            raise Rejected("speed and acceleration must be > 0")
+        vel, acc = min(vel, lim.max_vel), min(acc, lim.max_acc)
+        try:
+            a = self.client.axis(j.axis)
+            if a.state != mpb.DRIVE_STATE_OPERATION_ENABLED:
+                ok, msg = self.client.enable(j.axis)
+                if not ok:
+                    raise Rejected(f"enable {j.axis} refused: {msg}")
+                deadline = time.monotonic() + 5.0
+                while a.state != mpb.DRIVE_STATE_OPERATION_ENABLED:
+                    if time.monotonic() > deadline:
+                        raise Rejected(f"{j.axis} did not enable ({mpb.DriveState.Name(a.state)})")
+                    self.client.telemetry(fresh=True)
+                    a = self.client.axis(j.axis)
+            start = a.cmd_position_rad
+            target = j.to_deg * DEG if j.absolute else start + j.by_deg * DEG
+            if not lim.min_rad <= target <= lim.max_rad:
+                raise Rejected(
+                    f"{j.axis} target {np.degrees(target):.4f} deg is outside the soft limits "
+                    f"[{np.degrees(lim.min_rad):.1f}, {np.degrees(lim.max_rad):.1f}] deg"
+                )
+            move = tracker.MoveProfile(start, target, vel, acc)
+            step = int(NS / self.settings.tracking.point_rate_hz)
+            t0 = time.time_ns() + 300_000_000
+            n = max(1, math.ceil(move.duration * NS / step))
+            pts = [(t0 + k * step, *move.at(k * step / NS)) for k in range(n + 1)]
+            pts.append((pts[-1][0] + NS // 2, target, 0.0))  # settle point
+            self.client.clear_trajectory(j.axis)
+            self.client.send_points({j.axis: pts})
+        except MountError as e:
+            raise Rejected(str(e)) from None
+        name = f"jog {j.axis} to {np.degrees(target):.4f}°"
+        msg = (f"jog {j.axis} {np.degrees(start):.4f} -> {np.degrees(target):.4f} deg "
+               f"({np.degrees(target - start):+.4f}), {move.duration:.1f} s")
+        with self._lock:
+            self._gen += 1
+            self._state, self._message = "slewing", msg
+            self._target, self._target_kind, self._plan, self._path = None, "jog", None, []
+            self._jog = {"axis": j.axis, "name": name, "end_ns": pts[-1][0]}
+        return mpb.TargetReply(accepted=True, message=msg)
+
+    def _jog_finished(self, now: int) -> None:
+        with self._lock:
+            jog = self._jog
+        if jog is None or now < jog["end_ns"]:
+            return
+        try:
+            a = self.client.axis(jog["axis"])
+            done = f"jog done: {jog['axis']} at {np.degrees(a.act_position_rad):.4f} deg (holding)"
+        except MountError as e:
+            done = f"jog done ({e})"
+        with self._lock:
+            if self._jog is jog:
+                self._jog, self._target_kind = None, ""
+                self._state, self._message = "idle", done
 
     # -- passes ------------------------------------------------------------------------------
     def passes(self, req) -> mpb.PassesReply:
@@ -374,11 +453,12 @@ class MountService:
             self._clock_checked = time.monotonic()
             self._clock = clock.chrony_status()
         site = self.settings.site
+        self._jog_finished(now)
         with self._lock:
             st = mpb.ServiceStatus(
                 t_ns=now,
                 state=STATE[self._state],
-                target_name=getattr(self._target, "name", ""),
+                target_name=getattr(self._target, "name", "") or (self._jog["name"] if self._jog else ""),
                 target_kind=self._target_kind,
                 message=self._message,
                 clock_error_us=self._clock.error_bound_us if self._clock else -1.0,

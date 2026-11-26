@@ -14,7 +14,9 @@ WebSocket messages (JSON):
     {"type": "reply", "id", "ok", "message", "data"}
   client -> server
     {"type": "request", "id", "op", "args"}
-      op: target (TargetCommand as JSON), stop, hold, park, passes, tle_names
+      op: target (TargetCommand as JSON), stop, hold, park, passes, tle_names,
+          enable/disable {axis} and fault_reset (straight to mount-rt),
+          jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
 """
 from __future__ import annotations
 
@@ -164,15 +166,22 @@ class Gateway:
                 "cmd_deg": math.degrees(a.cmd_position_rad),
                 "act_deg": math.degrees(a.act_position_rad),
                 "err_arcsec": math.degrees(a.cmd_position_rad - a.act_position_rad) * 3600,
+                "cmd_vel_deg_s": math.degrees(a.cmd_velocity_rad_s),
                 "flags": a.flags,
                 "ferr_counts": a.following_error_counts,
                 "di": a.digital_inputs,
+                "sw": a.statusword,
+                "error_code": a.error_code,
+                "vendor_error": a.vendor_error_register,
+                "buffered": a.buffered_points,
             })
         msg = {
             "type": "telemetry",
             "t_ns": m.t_ns,
             "enabled": m.enabled,
             "tripped": m.tripped,
+            "inputs_fresh": m.inputs_fresh,
+            "cycle": m.cycle,
             "axes": axes,
             "loop": {"max_lat_us": m.loop.max_wake_latency_ns / 1000, "overruns": m.loop.overruns, "cycles": m.loop.cycles},
             "bus": {"lost": m.bus.lost_frames, "wkc": m.bus.working_counter_errors},
@@ -246,6 +255,8 @@ class Gateway:
             "park": {"az_deg": self.park[0], "el_deg": self.park[1]},
             "max_clock_error_us": s.max_clock_error_us,
             "tle_groups": list(TLE_GROUPS),
+            "axes": s.axes_info,
+            "fieldbus": {k: s.fieldbus.get(k) for k in ("backend", "interface", "cycle_us")},
         }
 
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
@@ -309,6 +320,20 @@ class Gateway:
             return self._target(mpb.TargetCommand(stop=mpb.Stop(keep_enabled=True)))
         if op == "park":
             return self._target(mpb.TargetCommand(goto_altaz=mpb.AltAz(az_deg=self.park[0], el_deg=self.park[1], name="park")))
+        if op in ("enable", "disable"):
+            axis = str(args.get("axis", ""))
+            ok, msg = getattr(self.client, op)(axis)
+            return ok, f"{op} {axis or 'all axes'}: {msg}", None
+        if op == "fault_reset":
+            ok, msg = self.client.fault_reset()
+            return ok, f"fault reset: {msg}", None
+        if op == "jog":
+            jog = mpb.JogAxis(
+                axis=str(args.get("axis", "")), by_deg=float(args.get("by_deg", 0)), to_deg=float(args.get("to_deg", 0)),
+                absolute=bool(args.get("absolute", False)), vel_deg_s=float(args.get("vel_deg_s", 0)),
+                acc_deg_s2=float(args.get("acc_deg_s2", 0)),
+            )
+            return self._target(mpb.TargetCommand(jog_axis=jog))
         if op == "tle_names":
             sats, note = self.tles.group(args.get("group", "stations"))
             return True, f"{len(sats)} objects ({note})", {"names": sorted(sats)}

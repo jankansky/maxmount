@@ -55,6 +55,16 @@ struct SdoWrite {
     std::int64_t value = 0;
 };
 
+// A vendor register read by SDO when the drive enters Fault, for diagnostics (e.g. the
+// Technosoft Motion Error Register). `decode` names a bit table the GUI knows.
+struct ErrorRegister {
+    std::uint16_t index = 0;
+    std::uint8_t subindex = 0;
+    std::uint8_t size = 2;  // bytes, 1..4
+    std::string name;
+    std::string decode;
+};
+
 struct DriveDescriptor {
     std::string vendor;
     std::string model;
@@ -74,6 +84,7 @@ struct DriveDescriptor {
     std::vector<PdoEntry> rx_pdo;  // master -> drive, in process-image order
     std::vector<PdoEntry> tx_pdo;  // drive -> master, in process-image order
     std::vector<SdoWrite> startup_sdo;
+    std::optional<ErrorRegister> error_register;
 };
 
 // Returns an empty string if the descriptor is usable, otherwise a description of the problem.

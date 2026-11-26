@@ -12,7 +12,7 @@ are planned.
 | `mount/cmd` | queryable | `MountCommand` → `CommandReply` | GUI, scheduler → mount-rt |
 | `mount/telemetry` | pub (50 Hz) | `MountTelemetry` | mount-rt → all |
 | `mount/telemetry/raw` | pub (every cycle, in batches of 50) | `MountTelemetryBatch` | mount-rt → loggers, camera-svc |
-| `svc/target` | queryable | `TargetCommand` → `TargetReply` | GUI, scheduler, camera loop → mount-svc |
+| `svc/target` | queryable | `TargetCommand` → `TargetReply` (track, go to, offsets, stop, axis jog) | GUI, scheduler, camera loop → mount-svc |
 | `svc/passes` | queryable | `PassesRequest` → `PassesReply` | GUI, scheduler → mount-svc |
 | `svc/status` | pub (2 Hz) | `ServiceStatus` | mount-svc → GUI, scheduler |
 | `camera/<id>/preview` | pub | JPEG/H.264 frame (TBD) | camera-svc → GUI |

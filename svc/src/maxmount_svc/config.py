@@ -69,6 +69,10 @@ class SystemSettings:
     zenoh: ZenohSettings
     max_clock_error_us: float = 10.0
     pointing_file: Path | None = None
+    # Every axis of the system file, for display (Drives screen): name, drive, bus position,
+    # scaling, limits in degrees and the drive descriptor's vendor/model/error register.
+    axes_info: list[dict] = field(default_factory=list)
+    fieldbus: dict = field(default_factory=dict)
 
 
 class ConfigError(RuntimeError):
@@ -86,6 +90,35 @@ def _limits(axis: dict, name: str) -> AxisLimits:
         )
     except (KeyError, TypeError, ValueError) as e:
         raise ConfigError(f"axis '{name}': incomplete limits ({e})") from None
+
+
+def _axes_info(doc: dict, drives_dir: Path) -> list[dict]:
+    out = []
+    for a in doc.get("axes") or []:
+        lim = a.get("limits") or {}
+        info = {
+            "name": a.get("name"),
+            "drive": a.get("drive", ""),
+            "bus_position": a.get("bus_position"),
+            "mechanics": a.get("mechanics", ""),
+            "counts_per_rev": a.get("counts_per_rev"),
+            "commissioned": a.get("counts_per_rev") is not None,
+            "invert": bool(a.get("invert", False)),
+            "offset_deg": float(a.get("offset_deg") or 0.0),
+            "limits": {k: (None if v is None else float(v)) for k, v in lim.items()},
+            "vendor": "", "model": "", "error_register": None,
+        }
+        try:
+            d = yaml.safe_load((drives_dir / f"{info['drive']}.yaml").read_text()) or {}
+            info["vendor"], info["model"] = str(d.get("vendor", "")), str(d.get("model", ""))
+            er = (d.get("diagnostics") or {}).get("error_register")
+            if er:
+                info["error_register"] = {"name": er.get("name", ""), "decode": er.get("decode", ""),
+                                          "index": er.get("index")}
+        except (OSError, yaml.YAMLError, AttributeError):
+            pass
+        out.append(info)
+    return out
 
 
 def load_system(path: str | Path) -> SystemSettings:
@@ -154,4 +187,6 @@ def load_system(path: str | Path) -> SystemSettings:
         zenoh=zenoh,
         max_clock_error_us=float((doc.get("time") or {}).get("max_clock_error_us", 10.0)),
         pointing_file=pointing_file,
+        axes_info=_axes_info(doc, path.resolve().parent.parent.parent / "drives"),
+        fieldbus=dict(doc.get("fieldbus") or {}),
     )

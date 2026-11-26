@@ -76,3 +76,39 @@ def test_main_screen(gui_url):
         assert not stray, stray
         browser.close()
     assert not errors, errors
+
+
+def test_drives_screen(gui_url):
+    errors = []
+    with playwright.sync_playwright() as p:
+        try:
+            browser = p.chromium.launch()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no Chromium for Playwright: {e}")
+        page = browser.new_page(viewport={"width": 1440, "height": 1100})
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.goto(gui_url)
+        page.get_by_role("button", name="Drives").click()
+        assert page.evaluate("() => location.hash") == "#drives"
+        page.wait_for_selector("[aria-label='Axis az'] .badge")
+        page.wait_for_function("() => document.querySelector(\"[aria-label='Axis az'] .badge\").textContent !== 'no data'", timeout=15000)
+
+        # Simulation: no arming needed. Jog az by +1 deg and wait for the event.
+        az = page.locator("[aria-label='Axis az']")
+        az.get_by_role("button", name="Jog az plus 1 degrees").click()
+        page.wait_for_function("() => document.querySelector(\"[aria-label='Axis az'] .reply\")?.textContent.startsWith('jog az')", timeout=15000)
+        page.wait_for_function("() => document.querySelector(\"[aria-label='Axis az'] .badge\").textContent === 'operation enabled'", timeout=15000)
+        page.wait_for_function("() => document.querySelector('.statusline').textContent.includes('jog done')", timeout=20000)
+        assert "OPERATION_ENABLED" in page.locator("[aria-label='Drive events']").text_content()
+
+        page.locator("[aria-label='Bus and controller']").get_by_role("button", name="Disable all").click()
+        page.wait_for_function("() => document.querySelector(\"[aria-label='Axis az'] .badge\").textContent !== 'operation enabled'", timeout=15000)
+        stray = page.evaluate("""() => { const w = document.createTreeWalker(document.querySelector('.drives'), NodeFilter.SHOW_TEXT);
+          const bad = []; while (w.nextNode()) { const t = w.currentNode.textContent.trim();
+          if (['section','div','label','span','input'].includes(t)) bad.push(t); } return bad; }""")
+        assert not stray, stray
+        page.get_by_role("button", name="Track").click()
+        assert page.locator("[aria-label='Target']").is_visible()
+        browser.close()
+    assert not errors, errors

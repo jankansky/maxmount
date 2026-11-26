@@ -58,6 +58,12 @@ units:
   # Record the slow-loop period here so velocity feedforward can be scaled correctly.
   velocity: internal
 
+# Read by SDO when the drive enters Fault and shown on the GUI's Drives screen.
+# Motion Error Register (MER): bit meanings from Technosoft's MER reference page; the CoE
+# object index 0x2000 is from the iPOS EtherCAT manual. CHECK on the drive (slaveinfo -sdo).
+diagnostics:
+  error_register: {index: 0x2000, sub: 0, size: 2, name: MER, decode: technosoft_mer}
+
 startup_sdo:           # written at PRE-OP -> SAFE-OP, before the PDO mapping
   # Interpolation time period 0x60C2 = 1 x 10^-3 s; must match the mount-rt cycle.
   - {index: 0x60C2, sub: 1, type: u8, value: 1}

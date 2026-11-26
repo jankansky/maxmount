@@ -1,32 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// maxmount GUI: main (Track) screen. Talks only to the gateway (mount-svc gui) over a WebSocket.
+// maxmount GUI: Track screen and app shell (Drives screen in drives.js). Talks only to the gateway (mount-svc gui) over a WebSocket.
 import { html, render, useState, useEffect, useRef, useCallback } from './vendor/preact-htm-standalone.module.js';
 import { connect } from './lib/ws.js';
 import { drawStrip, drawSky, drawMap, cssVar } from './lib/charts.js';
+import { pad, dms, hms, utc, dur, loadPref, savePref } from './lib/util.js';
+import { DrivesScreen } from './drives.js';
 
-// ---- formatting ---------------------------------------------------------------------------
-const pad = (n, w = 2) => String(Math.floor(Math.abs(n))).padStart(w, '0');
-function dms(deg, signed = true, wDeg = 2) {
-  if (deg === undefined || deg === null || !Number.isFinite(deg)) return '—';
-  const s = deg < 0 ? '−' : signed ? '+' : '';
-  let a = Math.abs(deg);
-  let d = Math.floor(a), m = Math.floor((a - d) * 60), sec = Math.round(((a - d) * 60 - m) * 60);
-  if (sec === 60) { sec = 0; m += 1; }
-  if (m === 60) { m = 0; d += 1; }
-  return `${s}${pad(d, wDeg)}°${pad(m)}′${pad(sec)}″`;
-}
-function hms(hours, dec = 1) {
-  if (hours === undefined || !Number.isFinite(hours)) return '—';
-  const h = ((hours % 24) + 24) % 24;
-  const H = Math.floor(h), M = Math.floor((h - H) * 60), S = ((h - H) * 60 - M) * 60;
-  return `${pad(H)}h${pad(M)}m${S.toFixed(dec).padStart(dec ? dec + 3 : 2, '0')}s`;
-}
-const utc = (ns) => (ns ? new Date(Number(ns) / 1e6).toISOString().slice(11, 19) : '—');
-function dur(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const s = Math.round(seconds);
-  return s >= 3600 ? `${Math.floor(s / 3600)}h ${pad((s % 3600) / 60)}m` : `${pad(s / 60)}:${pad(s % 60)}`;
-}
+
 const STATE = {
   SERVICE_STATE_IDLE: 'idle', SERVICE_STATE_WAITING: 'waiting for pass', SERVICE_STATE_SLEWING: 'slewing',
   SERVICE_STATE_TRACKING: 'tracking', SERVICE_STATE_ERROR: 'error', SERVICE_STATE_UNKNOWN: '—',
@@ -53,7 +33,10 @@ function Chip({ cls = '', children, title }) {
   return html`<span class=${'chip mono ' + cls} title=${title}>${children}</span>`;
 }
 
-function Header({ theme, setTheme, line, status, tel, hello, connected }) {
+const SCREENS = [['track', 'Track'], ['drives', 'Drives']];
+const LATER = ['Satellite events', 'Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
+
+function Header({ theme, setTheme, line, status, tel, hello, connected, screen, setScreen }) {
   const clk = status ? Number(status.clock_error_us) : -1;
   const maxClk = hello?.max_clock_error_us ?? 10;
   const clkText = clk < 0 ? 'clock ?' : clk < 1000 ? `clock ±${clk.toFixed(0)} µs` : `clock ±${(clk / 1000).toFixed(1)} ms`;
@@ -61,9 +44,8 @@ function Header({ theme, setTheme, line, status, tel, hello, connected }) {
   return html`<header>
     <span class="brand">maxmount</span>
     <nav aria-label="Sections">
-      <button class="active">Track</button>
-      ${['Satellite events', 'Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Drives', 'Setup'].map(
-        (n) => html`<button disabled title="not built yet">${n}</button>`)}
+      ${SCREENS.map(([id, label]) => html`<button class=${screen === id ? 'active' : ''} aria-current=${screen === id ? 'page' : undefined} onClick=${() => setScreen(id)}>${label}</button>`)}
+      ${LATER.map((n) => html`<button disabled title="not built yet">${n}</button>`)}
     </nav>
     <div class="statusline mono" title=${line}>${line || '…'}</div>
     <div class="chips">
@@ -249,11 +231,6 @@ function Corrections({ status, send }) {
   </section>`;
 }
 
-function loadPref(key, fallback) {
-  try { const v = localStorage.getItem('maxmount.' + key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; }
-}
-function savePref(key, value) { try { localStorage.setItem('maxmount.' + key, JSON.stringify(value)); } catch (e) { /* private mode */ } }
-
 function Passes({ hello, send, status, connected }) {
   const [group, setGroup] = useState(loadPref('group', 'stations'));
   const [names, setNames] = useState(loadPref('watch', 'ISS (ZARYA), CSS (TIANHE)'));
@@ -379,6 +356,29 @@ function TelemetryPanel({ status, history, now }) {
   </section>`;
 }
 
+// Drive state changes, faults and trips, for the Drives screen's event log; also remembers
+// each axis's last fault (error code and vendor register) after it has been reset.
+function noteEvents(prev, m, events, faults) {
+  const stamp = new Date(Number(m.t_ns) / 1e6).toISOString().slice(11, 19);
+  const push = (text, bad = false) => { events.push({ t: stamp, text, bad }); if (events.length > 200) events.shift(); };
+  for (const a of m.axes) {
+    const p = prev?.axes.find((x) => x.axis === a.axis);
+    if (!p || p.state !== a.state) push(`${a.axis}: ${p ? p.state + ' → ' : ''}${a.state}`, a.state === 'FAULT');
+    if (a.error_code || a.vendor_error) {
+      const f = faults[a.axis];
+      if (!f || f.code !== a.error_code || f.vendor !== a.vendor_error) {
+        if (!p || p.error_code !== a.error_code || p.vendor_error !== a.vendor_error) {
+          push(`${a.axis}: error code 0x${a.error_code.toString(16).toUpperCase().padStart(4, '0')}` +
+            (a.vendor_error ? `, vendor register 0x${a.vendor_error.toString(16).toUpperCase().padStart(4, '0')}` : ''), true);
+        }
+        faults[a.axis] = { code: a.error_code, vendor: a.vendor_error, t: Number(m.t_ns) / 1e6 };
+      }
+    }
+  }
+  if (prev && !prev.tripped && m.tripped) push('following-error trip: all axes quick-stopped', true);
+  if (prev && prev.tripped && !m.tripped) push('trip cleared');
+}
+
 // ---- app -----------------------------------------------------------------------------------
 function App() {
   const [theme, setThemeState] = useState(document.documentElement.dataset.theme || 'dark');
@@ -391,9 +391,20 @@ function App() {
   const [land, setLand] = useState(null);
   const [now, setNow] = useState(Date.now());
   const history = useRef({ az: [], el: [], lat: [] });
+  const [screen, setScreenState] = useState(() => (location.hash === '#drives' ? 'drives' : 'track'));
+  const events = useRef([]);
+  const faults = useRef({});
+  const prevTel = useRef(null);
   const link = useRef(null);
   const dialogRef = useRef(null);
   const lastMsg = useRef('');
+
+  const setScreen = (id) => { setScreenState(id); location.hash = id === 'track' ? '' : id; };
+  useEffect(() => {
+    const onHash = () => setScreenState(location.hash === '#drives' ? 'drives' : 'track');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const setTheme = (t) => {
     document.documentElement.dataset.theme = t;
@@ -412,11 +423,11 @@ function App() {
           setTel(m);
           const t = Number(m.t_ns) / 1e9;
           const h = history.current;
-          const az = m.axes.find((a) => a.axis === 'az'), el = m.axes.find((a) => a.axis === 'el');
-          if (az) h.az.push([t, Math.abs(az.err_arcsec)]);
-          if (el) h.el.push([t, Math.abs(el.err_arcsec)]);
+          for (const a of m.axes) (h[a.axis] ||= []).push([t, Math.abs(a.err_arcsec)]);
           h.lat.push([t, m.loop.max_lat_us]);
-          for (const k of ['az', 'el', 'lat']) while (h[k].length && h[k][0][0] < t - 65) h[k].shift();
+          for (const k of Object.keys(h)) while (h[k].length && h[k][0][0] < t - 65) h[k].shift();
+          noteEvents(prevTel.current, m, events.current, faults.current);
+          prevTel.current = m;
         } else if (m.type === 'status') {
           setStatus(m);
           if (m.message && m.message !== lastMsg.current) {
@@ -439,8 +450,13 @@ function App() {
   const openDialog = () => dialogRef.current?.showModal();
 
   return html`
-    <${Header} theme=${theme} setTheme=${setTheme} line=${line} status=${status} tel=${tel} hello=${hello} connected=${connected} />
-    <div class="layout">
+    <${Header} theme=${theme} setTheme=${setTheme} line=${line} status=${status} tel=${tel} hello=${hello} connected=${connected}
+      screen=${screen} setScreen=${setScreen} />
+    <div class="layout" hidden=${screen !== 'drives'}>
+      <${DrivesScreen} tel=${tel} hello=${hello} status=${status} send=${send}
+        history=${history.current} now=${now} events=${events.current} faults=${faults.current} />
+    </div>
+    <div class="layout" hidden=${screen !== 'track'}>
       <aside class="col-left">
         <${MountPanel} tel=${tel} act=${act} />
         <${TargetCard} status=${status} openDialog=${openDialog} now=${now} />

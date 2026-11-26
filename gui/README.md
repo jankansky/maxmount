@@ -38,6 +38,33 @@ svc/.venv/bin/mount-svc --system $SYS gui           # http://<pi>:8080
   - target telemetry (rates, range, range rate, altitude, TLE age);
   - strip charts with grid lines: following error, and loop wake-up latency.
 
+## The Drives screen (`#drives`)
+
+For commissioning and maintenance.
+
+- **Bus panel:**
+  - EtherCAT backend, interface and cycle;
+  - loop cycles, overruns, lost frames, working-counter errors;
+  - inputs-fresh, any-enabled, trip and fault indicators;
+  - wake-up latency chart;
+  - **STOP**, **Fault reset** (all drives, also clears a following-error trip) and **Disable all**.
+- **One card per axis in the system file:**
+  - CiA 402 state ladder, decoded statusword (0x6041);
+  - position in the axis frame (raw counts until `counts_per_rev` is set) against the soft limits;
+  - controller flags, limit and home inputs (0x60FD);
+  - following-error chart;
+  - **Fault:** the error code (0x603F, read by SDO when the drive faults) and the drive's vendor
+    error register, decoded bit by bit (Technosoft MER, object 0x2000; the descriptor's
+    `diagnostics.error_register`). The last fault stays shown after a reset;
+  - configuration from the system file;
+  - **Enable / Disable** (straight to `mount-rt`);
+  - **Jog:** relative step or absolute **Move to**, at a chosen speed, in the axis frame, through
+    `mount-svc` (it owns the trajectory stream). The axis is enabled if needed and holds
+    afterwards. Refused while a target is active, outside the soft limits, or while the previous
+    jog is moving. On hardware, motion must be armed first (a checkbox that clears on a fault
+    or trip).
+- **Event log:** state changes, faults and trips seen by this browser.
+
 ## Implementation
 
 - **No build step:** plain ES modules plus [Preact](https://preactjs.com) and
@@ -50,5 +77,5 @@ svc/.venv/bin/mount-svc --system $SYS gui           # http://<pi>:8080
 - **Theming:** all colours are CSS variables (`styles.css`), and the canvas drawings read them,
   so the Dark/Red switch covers charts and maps too.
 - **Smoke test:** `svc/tests/test_gui_smoke.py` drives the whole simulated stack in headless
-  Chromium and fails on any JavaScript error. It needs `pip install playwright` and
+  Chromium (Track screen, and a jog on the Drives screen) and fails on any JavaScript error. It needs `pip install playwright` and
   `playwright install chromium`; otherwise it is skipped.
