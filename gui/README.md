@@ -116,8 +116,11 @@ it, **Drives** (`#drives`).
   - ZWO (`zwo`, served by `mount-svc zwo`): video with the camera's frame rate, dropped
     frames and sensor temperature; exposure, gain and offset (type a value, Enter), format
     (RAW8, RAW16, RGB24), binning, a centred ROI, USB bandwidth, auto-stretch; Capture frame
-    saves the next frame at full bit depth as FITS on the Pi; histogram and statistics as for
-    the D500;
+    saves the next frame at full bit depth as FITS on the Pi; Record SER records the video
+    stream to a SER file on the Pi for a set time or number of frames (0 = until Stop),
+    showing elapsed time, frames, size, the RAM buffer's fill, frames dropped because the disk
+    fell behind, and free disk space (format, bin and ROI are fixed while recording);
+    histogram and statistics as for the D500;
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets.
 - **Right column:**

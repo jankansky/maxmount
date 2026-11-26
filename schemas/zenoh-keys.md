@@ -15,9 +15,9 @@ are planned.
 | `svc/target` | queryable | `TargetCommand` → `TargetReply` (track, go to, offsets, stop, axis jog) | GUI, scheduler, camera loop → mount-svc |
 | `svc/passes` | queryable | `PassesRequest` → `PassesReply` | GUI, scheduler → mount-svc |
 | `svc/status` | pub (2 Hz) | `ServiceStatus` | mount-svc → GUI, scheduler |
-| `camera/<id>/status` | pub (1 Hz and on change) | `CameraStatus` (camera.proto) | camera service (`mount-svc dslr`: id `dslr`) → GUI |
+| `camera/<id>/status` | pub (1 Hz and on change) | `CameraStatus` (camera.proto) | camera service (`mount-svc dslr`: id `dslr`; `mount-svc zwo`: id `zwo`) → GUI |
 | `camera/<id>/frame` | pub | `CameraFrame`: live view JPEG, and each capture's preview with histogram | camera service → GUI |
-| `camera/<id>/cmd` | queryable | `CameraCommand` → `CameraReply` (settings, capture, bulb, live view, save to, abort) | GUI → camera service |
+| `camera/<id>/cmd` | queryable | `CameraCommand` → `CameraReply` (settings, capture, bulb, live view, save to, abort, SER recording) | GUI → camera service |
 | `camera/<id>/centroid` | pub | measured offset + mid-exposure time (TBD) | camera-svc → mount-svc |
 | `time/status` | pub | clock source, offset, error estimate (TBD) | time monitor → mount-svc, GUI |
 | `safety/status` | pub | safe/unsafe + reasons (TBD) | supervisor → all |

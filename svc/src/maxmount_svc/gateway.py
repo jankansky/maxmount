@@ -20,7 +20,8 @@ WebSocket messages (JSON):
           conjunctions {hours, max_range_km, lighting, max_mag, coorbiting} (SOCRATES, visible from the site),
           aircraft {max_range_km, show, selected} (local ADS-B receiver: list, map, sky, the selected one's path),
           set_imaging {profile} (the active narrow-field imaging profile; broadcast as {"type": "imaging"}),
-          camera {camera_id, set {name, value} | capture {bulb_s} | liveview | save_to | stretch | abort}
+          camera {camera_id, set {name, value} | capture {bulb_s} | liveview | save_to | stretch | abort
+                  | record {on, duration_s, max_frames}}
             (to camera/<id>/cmd; status arrives as {"type": "camera"}, frames as {"type": "camframe"}),
           conjunction_detail {cat1, cat2, primary, tca_ns} (both paths, separation, the pass to track),
           enable/disable {axis} and fault_reset (straight to mount-rt),
@@ -277,6 +278,11 @@ class Gateway:
             cmd.stretch = bool(args["stretch"])
         elif "abort" in args:
             cmd.abort = True
+        elif "record" in args:
+            r = args["record"] or {}
+            cmd.record.on = bool(r.get("on", True))
+            cmd.record.duration_s = float(r.get("duration_s") or 0)
+            cmd.record.max_frames = int(r.get("max_frames") or 0)
         else:
             return False, "empty camera command", None
         out = self.client.query(f"camera/{cam}/cmd", cmd.SerializeToString(), timeout=20)

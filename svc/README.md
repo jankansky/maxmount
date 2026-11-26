@@ -106,3 +106,14 @@ from ZWO (not redistributed here):
    `usbcore.usbfs_memory_mb=200` to `/boot/firmware/cmdline.txt` and reboot.
 
 Without a camera, `mount-svc zwo --sim` simulates an ASI224MC.
+
+**SER video.** The record command (GUI: Record SER) writes the video stream to
+`<data_dir>/zwo/<date>/<time>_<format>_<w>x<h>_<exposure>.ser` with a JSON sidecar (settings,
+mount target at the start, frames, drops, why it stopped). SER files open in AutoStakkert!,
+PIPP, Siril, RegiStax and SER Player; each frame's timestamp is the start of its exposure
+(arrival on the Pi minus the exposure, so approximate). Raw colour frames are stored as an
+RGGB Bayer mosaic, RAW16 as 16-bit little-endian (the 12-bit data shifted up by 4), RGB24 as
+RGB. Frames wait in a RAM buffer (`cameras.zwo.record_buffer_mb`, allocated when recording
+starts) for the disk; when it is full, frames are dropped and counted rather than slowing the
+camera. Recording stops when free space falls below `cameras.zwo.record_min_free_mb`.
+`maxmount_svc.ser.read_ser()` reads the files back in Python.

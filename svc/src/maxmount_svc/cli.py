@@ -334,6 +334,8 @@ def cmd_zwo(args, sys_: SystemSettings) -> int:
     cfg = sys_.zwo
     try:
         backend = ZwoSimBackend() if (args.sim or cfg.backend == "sim") else ZwoSdkBackend(cfg.sdk_lib)
+        backend.record_buffer_bytes = int(cfg.record_buffer_mb * 1e6)
+        backend.record_min_free_bytes = int(cfg.record_min_free_mb * 1e6)
     except CameraError as e:
         print(f"mount-svc: {e}", file=sys.stderr)
         return 1
@@ -416,7 +418,7 @@ def main(argv=None) -> int:
     p.add_argument("--sim", action="store_true", help="a simulated camera (synthetic star field)")
     p.set_defaults(func=cmd_dslr)
 
-    p = sub.add_parser("zwo", help="serve the ZWO camera (ASI SDK) for the GUI: video, ROI, FITS frames")
+    p = sub.add_parser("zwo", help="serve the ZWO camera (ASI SDK) for the GUI: video, ROI, FITS frames, SER recording")
     p.add_argument("--sim", action="store_true", help="a simulated ASI224MC (star field and a moving target)")
     p.set_defaults(func=cmd_zwo)
 

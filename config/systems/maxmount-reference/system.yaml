@@ -120,8 +120,10 @@ cameras:
   zwo:
     backend: sdk              # or sim: a simulated ASI224MC
     sdk_lib: /usr/local/lib/libASICamera2.so
-    data_dir: ~/maxmount-data # frames (FITS) go to <data_dir>/zwo/<date>/
+    data_dir: ~/maxmount-data # frames (FITS) and videos (SER) go to <data_dir>/zwo/<date>/
     liveview_fps: 8           # previews to the GUI; the camera itself streams faster
+    record_buffer_mb: 512     # SER recording: frames held in RAM while the SD card catches up
+    record_min_free_mb: 2048  # recording stops when the disk has less free space than this
 
 # ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
 # 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.

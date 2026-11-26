@@ -49,6 +49,19 @@ message CameraStatus {
   int32 sensor_width = 22;
   int32 sensor_height = 23;
   repeated string storage = 24; // where captures can go: card, pi, both
+  // SER video recording (zwo): the recording in progress, or the last one.
+  bool recording = 25;
+  string record_file = 26;      // on the Pi
+  int64 record_frames = 27;     // written to the file
+  int64 record_dropped = 28;    // not recorded because the disk fell behind (the camera's own drops are in dropped)
+  double record_elapsed_s = 29;
+  int64 record_bytes = 30;
+  int64 record_queued = 31;     // frames waiting in RAM for the disk
+  int64 record_pool = 32;       // frames the RAM buffer holds
+  int64 disk_free_bytes = 33;
+  double record_max_s = 34;     // 0: no time limit
+  int64 record_max_frames = 35; // 0: no frame limit
+  bool records_video = 36;      // the camera can record video
 }
 
 message SetCameraSetting {
@@ -60,6 +73,13 @@ message Capture {
   double bulb_s = 1;            // > 0: a bulb exposure timed by the service; 0: the camera's shutter speed
 }
 
+// Start or stop recording the video stream to a SER file on the Pi. Starting turns video on.
+message Record {
+  bool on = 1;
+  double duration_s = 2;        // 0: until stopped (or the disk is nearly full)
+  int32 max_frames = 3;         // 0: no limit
+}
+
 message CameraCommand {
   oneof command {
     SetCameraSetting set = 1;
@@ -68,6 +88,7 @@ message CameraCommand {
     string save_to = 4;         // card | pi | both
     bool stretch = 5;
     bool abort = 6;             // end a bulb exposure early
+    Record record = 7;
   }
 }
 

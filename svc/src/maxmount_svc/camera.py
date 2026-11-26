@@ -5,7 +5,8 @@
 settings (ISO, shutter speed, image quality), capture (the camera's shutter speed, or bulb
 timed here), live view, and a stretched JPEG preview of each capture with a histogram. Files
 go to the camera's card, the Pi (data_dir/<date>/), or both; each capture saved on the Pi gets
-a JSON sidecar with the times, settings and what the mount was tracking.
+a JSON sidecar with the times, settings and what the mount was tracking. Video cameras (the
+ZWO, zwo.py) also record SER video on the Pi (the record command), with a sidecar likewise.
 
 One thread owns the camera (libgphoto2 is not thread-safe): commands are queued to it, and it
 polls live view frames while nothing else is happening.
@@ -550,6 +551,8 @@ class CameraService:
             elif which == "capture":
                 self._capture(arg.bulb_s)
                 result.update(ok=True, message="captured")
+            elif which == "record":
+                result.update(ok=True, message=self._record(arg))
         except CameraError as e:
             self._set(state="error" if which == "capture" else self._state, message=str(e))
             result.update(ok=False, message=str(e))
@@ -614,6 +617,59 @@ class CameraService:
         self._set(state="liveview" if was_live else "idle", exposure_s=0.0, exposure_end=0,
                   message=f"capture {n}: {len(shot.files)} file(s) {where}")
 
+    def _mount_snapshot(self) -> dict | None:
+        with self._lock:
+            svc = self._svc_status
+        if svc is None or not svc.target_name:
+            return None
+        return {"target": svc.target_name, "kind": svc.target_kind, "state": mpb.ServiceState.Name(svc.state),
+                "target_az_deg": svc.target_az_deg, "target_el_deg": svc.target_el_deg}
+
+    def _record(self, arg) -> str:
+        """Start or stop SER recording of the video stream (video cameras)."""
+        b = self.backend
+        if not getattr(b, "records_video", False):
+            raise CameraError("this camera cannot record video")
+        if not arg.on:
+            rec = b.stop_record("stopped")
+            return "recording stopped" if rec is not None else "not recording"
+        if arg.duration_s < 0 or arg.max_frames < 0:
+            raise CameraError("duration and frame limit must be >= 0")
+        if not self._liveview:
+            b.set_liveview(True)
+            self._set(liveview=True, state="liveview")
+        t0 = time.time_ns()
+        day = self.data_dir / time.strftime("%Y%m%d", time.gmtime(t0 / NS))
+        stem = time.strftime("%Y%m%dT%H%M%S", time.gmtime(t0 / NS))
+        values = {d["name"]: d["value"] for d in self._settings}
+        side = {"camera": self._model, "start_utc_ns": t0, "settings": values, "duration_limit_s": arg.duration_s,
+                "frame_limit": arg.max_frames,
+                "note": "SER timestamps are the start of each exposure: frame arrival on the Pi minus the exposure (approximate)"}
+        mount = self._mount_snapshot()
+        if mount:
+            side["mount_at_start"] = mount
+
+        def done(rec):
+            side.update(file=rec.path.name, frames=rec.frames, dropped=rec.dropped, end_utc_ns=rec.end_ns,
+                        elapsed_s=round(rec.elapsed_s, 3), bytes=rec.writer.bytes_written, stopped_because=rec.reason)
+            try:
+                rec.path.with_suffix(".json").write_text(json.dumps(side, indent=1))
+            except OSError as e:
+                log.warning("camera: sidecar: %s", e)
+            fps = rec.frames / rec.elapsed_s if rec.elapsed_s > 0 else 0.0
+            msg = (f"recorded {rec.frames} frames ({rec.writer.bytes_written / 1e6:.0f} MB, {rec.elapsed_s:.1f} s, "
+                   f"{fps:.1f} fps) to {rec.path.name} on the Pi: {rec.reason}")
+            if rec.dropped:
+                msg += f"; {rec.dropped} frames dropped (disk too slow)"
+            self._set(message=msg)
+
+        rec = b.start_record(day, stem, max_frames=arg.max_frames, max_s=arg.duration_s, on_done=done)
+        limits = [f"{arg.duration_s:g} s" if arg.duration_s else "", f"{arg.max_frames} frames" if arg.max_frames else ""]
+        limit = " or ".join(x for x in limits if x) or "until stopped"
+        msg = f"recording to {rec.path.name} on the Pi ({limit})"
+        self._set(message=msg)
+        return msg
+
     def _liveview_frame(self):
         """The backend's latest live frame: a JPEG (DSLR live view) or an array (video camera)."""
         with self._lock:
@@ -633,6 +689,7 @@ class CameraService:
                 exposure_s=self._exposure_s, exposure_end_ns=self._exposure_end, save_to=self._save_to,
                 data_dir=str(self.data_dir), simulated=bool(getattr(self.backend, "simulated", False)),
                 stretch=self._stretch, bulb_supported=bool(getattr(self.backend, "bulb_supported", False)),
+                records_video=bool(getattr(self.backend, "records_video", False)),
             )
             for d in self._settings:
                 st.settings.add(name=d["name"], label=d.get("label") or LABELS.get(d["name"], d["name"]), value=str(d["value"]),
@@ -648,6 +705,14 @@ class CameraService:
                 st.temperature_c = float(x.get("temperature_c", float("nan")))
                 st.roi.extend(int(v) for v in x.get("roi", []))
                 st.sensor_width, st.sensor_height = int(x.get("sensor_width", 0)), int(x.get("sensor_height", 0))
+                st.recording = bool(x.get("recording", False))
+                if "record_file" in x:
+                    st.record_file = str(x["record_file"])
+                    st.record_frames, st.record_dropped = int(x["record_frames"]), int(x["record_dropped"])
+                    st.record_elapsed_s, st.record_bytes = float(x["record_elapsed_s"]), int(x["record_bytes"])
+                    st.record_queued, st.record_pool = int(x["record_queued"]), int(x["record_pool"])
+                    st.disk_free_bytes = int(x["disk_free_bytes"])
+                    st.record_max_s, st.record_max_frames = float(x["record_max_s"]), int(x["record_max_frames"])
             except Exception:  # noqa: BLE001 - status must not fail
                 pass
         return st

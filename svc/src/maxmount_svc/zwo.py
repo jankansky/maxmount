@@ -2,8 +2,9 @@
 """ZWO ASI camera backends for the camera service (`mount-svc zwo`; camera id "zwo").
 
 Video streaming with a region of interest (ROI), binning, exposure, gain, offset, image type
-and USB bandwidth; single frames saved as FITS on the Pi. Live view previews are debayered
-(2x2 superpixel) and stretched by the camera service.
+and USB bandwidth; single frames saved as FITS on the Pi; video recorded as SER on the Pi
+(for lucky imaging: AutoStakkert!, PIPP, Siril). Live view previews are debayered (2x2
+superpixel) and stretched by the camera service.
 
 Backends:
   ZwoSdkBackend  a real camera through ZWO's ASI SDK (libASICamera2, a binary library from
@@ -14,17 +15,24 @@ Backends:
                  shot and read noise, a gain model and a USB frame-rate model.
 
 One video thread per backend grabs frames into reused buffers (on the Pi, allocating and
-freeing large buffers disturbs the real-time core: see deploy/README.md).
+freeing large buffers disturbs the real-time core: see deploy/README.md). While recording,
+the video thread copies each frame into a pool of buffers allocated when recording starts,
+and a writer thread writes them to the SER file; when the card falls behind and the pool is
+empty, frames are dropped (and counted) rather than stalling the camera.
 """
 from __future__ import annotations
 
 import math
+import queue
+import shutil
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
 from .camera import CameraError, Shot
+from .ser import SerWriter
 
 NS = 1_000_000_000
 ROI_PRESETS = ["full", "1024x768", "800x600", "640x480", "512x512", "320x240", "256x256", "128x128", "64x64"]
@@ -78,10 +86,151 @@ def superpixel_rgb(raw: np.ndarray) -> np.ndarray:
     return np.stack([r, (g1 + g2) / 2, b], axis=-1).astype(raw.dtype)
 
 
+# -- SER recording ---------------------------------------------------------------------------
+class Recorder:
+    """Records video frames to a SER file. offer() is called by the video thread for every
+    frame and only copies it into a free buffer from a fixed pool; a writer thread writes
+    them to the file. Stops at max_frames, after max_s, when the disk gets nearly full, on a
+    write error, or on stop(); then the writer finishes the file and calls on_done(self)."""
+
+    def __init__(self, path: Path, shape: tuple, dtype, color: str, bit_depth: int, instrument: str,
+                 max_frames: int = 0, max_s: float = 0.0, pool_bytes: int = 512_000_000,
+                 min_free_bytes: int = 2_000_000_000, on_done=None):
+        self.path = Path(path)
+        self.shape, self.dtype = tuple(shape), np.dtype(dtype)
+        self.max_frames, self.max_s = int(max_frames), float(max_s)
+        self.min_free_bytes = int(min_free_bytes)
+        self.on_done = on_done
+        self.free_bytes = shutil.disk_usage(self.path.parent).free
+        if self.free_bytes < self.min_free_bytes:
+            raise CameraError(f"only {self.free_bytes / 1e9:.1f} GB free on the Pi; not recording")
+        local_offset = -time.altzone if time.localtime().tm_isdst > 0 else -time.timezone
+        self.writer = SerWriter(self.path, shape[1], shape[0], color, bit_depth, instrument=instrument,
+                                utc_offset_s=local_offset)
+        frame_bytes = int(np.prod(self.shape)) * self.dtype.itemsize
+        n = int(min(max(pool_bytes // max(frame_bytes, 1), 4), 4096))
+        self._free: queue.Queue = queue.Queue()
+        for _ in range(n):
+            self._free.put(np.empty(self.shape, self.dtype))
+        self.pool_frames = n
+        self._full: queue.Queue = queue.Queue()
+        self._lock = threading.Lock()
+        self.accepted = 0
+        self.dropped = 0
+        self.reason = ""
+        self.error = False
+        self.stopping = False
+        self.done = threading.Event()
+        self.t0 = time.monotonic()
+        self.t_end = 0.0
+        self.start_ns = time.time_ns()
+        self.end_ns = 0
+        self._thread = threading.Thread(target=self._write_loop, daemon=True, name="ser-writer")
+        self._thread.start()
+
+    @property
+    def frames(self) -> int:
+        return self.writer.frames
+
+    @property
+    def elapsed_s(self) -> float:
+        return (self.t_end or time.monotonic()) - self.t0
+
+    @property
+    def queued(self) -> int:
+        return self._full.qsize()
+
+    def offer(self, frame: np.ndarray, t_ns: int) -> None:
+        """One video frame and its UTC time (ns). Never blocks."""
+        with self._lock:
+            if self.stopping:
+                return
+            if self.max_s and time.monotonic() - self.t0 >= self.max_s:
+                self._stop_locked(f"{self.max_s:g} s recorded")
+                return
+            if frame.shape != self.shape or frame.dtype.itemsize != self.dtype.itemsize:
+                self._stop_locked("the frame size or format changed", error=True)
+                return
+            try:
+                buf = self._free.get_nowait()
+            except queue.Empty:
+                self.dropped += 1  # the card is behind and the pool is used up
+                return
+            np.copyto(buf, frame, casting="unsafe")
+            self._full.put((buf, t_ns))
+            self.accepted += 1
+            if self.max_frames and self.accepted >= self.max_frames:
+                self._stop_locked(f"{self.max_frames} frames recorded")
+
+    def stop(self, reason: str = "stopped") -> None:
+        with self._lock:
+            self._stop_locked(reason)
+
+    def _stop_locked(self, reason: str, error: bool = False) -> None:
+        if self.stopping:
+            return
+        self.stopping, self.reason, self.error = True, reason, error
+        self.t_end = time.monotonic()
+        self._full.put(None)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self.done.wait(timeout)
+
+    def _write_loop(self) -> None:
+        last_check = time.monotonic()
+        try:
+            while True:
+                try:
+                    item = self._full.get(timeout=0.25)
+                except queue.Empty:
+                    item = False
+                if item is None:
+                    break
+                if item is not False:
+                    buf, t_ns = item
+                    self.writer.write(buf, t_ns)
+                    self._free.put(buf)
+                now = time.monotonic()
+                if now - last_check >= 1.0:
+                    last_check = now
+                    self.free_bytes = shutil.disk_usage(self.path.parent).free
+                    if self.free_bytes < self.min_free_bytes:
+                        self.stop(f"disk nearly full ({self.free_bytes / 1e9:.1f} GB free)")
+                    if self.max_s and now - self.t0 >= self.max_s:
+                        self.stop(f"{self.max_s:g} s recorded")  # also when no frames arrive
+        except OSError as e:
+            with self._lock:
+                self._stop_locked(f"write error: {e}", error=True)
+        finally:
+            try:
+                self.writer.close()
+            except OSError as e:
+                self.reason, self.error = f"{self.reason}; closing: {e}", True
+            self.end_ns = time.time_ns()
+            self.done.set()
+            # Release the pool (one large free when recording ends, not during it).
+            self._free = queue.Queue()
+            self._full = queue.Queue()
+            if self.on_done:
+                try:
+                    self.on_done(self)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def status(self) -> dict:
+        return {"recording": not self.done.is_set(), "record_file": str(self.path), "record_frames": self.frames,
+                "record_dropped": self.dropped, "record_elapsed_s": self.elapsed_s, "record_bytes": self.writer.bytes_written,
+                "record_queued": self.queued, "record_pool": self.pool_frames, "disk_free_bytes": self.free_bytes,
+                "record_max_s": self.max_s, "record_max_frames": self.max_frames}
+
+
 # -- shared base: settings, ROI, video thread ------------------------------------------------
 class _ZwoBase:
     storage = ("pi",)
     bulb_supported = False
+    records_video = True
+    record_buffer_bytes = 512_000_000
+    record_min_free_bytes = 2_000_000_000
 
     def __init__(self):
         self.model = "ZWO"
@@ -102,6 +251,7 @@ class _ZwoBase:
         self._fps = 0.0
         self._dropped = 0
         self._temperature = float("nan")
+        self._rec: Recorder | None = None       # the recording in progress (or the last one)
 
     # ROI in binned pixels, centred, with the SDK's alignment (width % 8, height % 2, even origin).
     def roi(self) -> tuple[int, int, int, int]:
@@ -148,6 +298,8 @@ class _ZwoBase:
             raise CameraError(f"{name}: '{value}' not offered")
         was = self._video
         geometry = name in ("image_type", "bin", "roi")
+        if geometry and self.recording:
+            raise CameraError(f"stop recording before changing {name}")
         if was and geometry:
             self._stop_video()
         self.v[name] = new
@@ -166,8 +318,49 @@ class _ZwoBase:
 
     def extra_status(self) -> dict:
         x, y, w, h = self.roi()
-        return {"fps": self._fps if self._video else 0.0, "dropped": self._dropped, "temperature_c": self._temperature,
-                "roi": [x, y, w, h], "sensor_width": self.sensor[0], "sensor_height": self.sensor[1]}
+        out = {"fps": self._fps if self._video else 0.0, "dropped": self._dropped, "temperature_c": self._temperature,
+               "roi": [x, y, w, h], "sensor_width": self.sensor[0], "sensor_height": self.sensor[1]}
+        if self._rec is not None:
+            out.update(self._rec.status())
+        return out
+
+    # -- SER recording ----------------------------------------------------------------------
+    @property
+    def recording(self) -> bool:
+        return self._rec is not None and not self._rec.done.is_set()
+
+    def frame_shape(self) -> tuple[tuple, type]:
+        """The shape and dtype of the video frames with the current settings."""
+        _x, _y, w, h = self.roi()
+        t = self.v["image_type"]
+        return ((h, w, 3) if t == "RGB24" else (h, w)), (np.uint16 if t == "RAW16" else np.uint8)
+
+    def start_record(self, directory: Path, stem: str, max_frames: int = 0, max_s: float = 0.0, on_done=None) -> Recorder:
+        """Record the video stream (which must be running) to <directory>/<stem>_<format>_<w>x<h>.ser."""
+        if self.recording:
+            raise CameraError("already recording")
+        if not self._video:
+            raise CameraError("start video before recording")
+        shape, dtype = self.frame_shape()
+        t = self.v["image_type"]
+        color = "RGB" if t == "RGB24" else ("BAYER_RGGB" if self.color else "MONO")
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{stem}_{t}_{shape[1]}x{shape[0]}_{self.v['exposure_ms']:g}ms.ser"
+        try:
+            self._rec = Recorder(path, shape, dtype, color, 16 if dtype == np.uint16 else 8, self.model,
+                                 max_frames=max_frames, max_s=max_s, pool_bytes=self.record_buffer_bytes,
+                                 min_free_bytes=self.record_min_free_bytes, on_done=on_done)
+        except OSError as e:
+            raise CameraError(f"cannot record to {path}: {e}") from None
+        return self._rec
+
+    def stop_record(self, reason: str = "stopped", wait_s: float = 30.0) -> Recorder | None:
+        rec = self._rec
+        if rec is not None and not rec.done.is_set():
+            rec.stop(reason)
+            rec.wait(wait_s)
+        return rec
 
     # -- video ------------------------------------------------------------------------------
     def set_liveview(self, on: bool) -> None:
@@ -187,6 +380,7 @@ class _ZwoBase:
         self._thread.start()
 
     def _stop_video(self) -> None:
+        self.stop_record("video stopped")
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=5)
@@ -203,11 +397,16 @@ class _ZwoBase:
                     break
                 time.sleep(0.01)
                 continue
+            t_ns = time.time_ns()
+            rec = self._rec
+            if rec is not None and not rec.stopping:
+                # SER times are the start of each exposure (approximate: arrival minus exposure).
+                rec.offer(frame, t_ns - int(self.v["exposure_ms"] * 1_000_000))
             with self._lock:
                 if self._latest is None or self._latest.shape != frame.shape or self._latest.dtype != frame.dtype:
                     self._latest = np.empty_like(frame)
                 np.copyto(self._latest, frame)
-                self._latest_t = time.time_ns()
+                self._latest_t = t_ns
                 self._seq += 1
             n += 1
             now = time.monotonic()

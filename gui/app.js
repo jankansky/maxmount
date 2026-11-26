@@ -267,8 +267,40 @@ function NumSetting({ st, cmd, disabled }) {
     onChange=${send} onKeyDown=${(e) => e.key === 'Enter' && e.target.blur()} />${st.unit ? ` ${st.unit}` : ''}</label>`;
 }
 
+const mb = (b) => { const n = Number(b) || 0; return n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${(n / 1e6).toFixed(0)} MB`; };
+
+// SER video recording controls for a video camera: limits (seconds, frames; 0 = none), and
+// while recording, progress, the RAM buffer's fill, dropped frames and free disk space.
+function RecordBar({ cam, cmd, disabled }) {
+  const [secs, setSecs] = useState(loadPref('zwo_rec_s', 30));
+  const [frames, setFrames] = useState(loadPref('zwo_rec_frames', 0));
+  if (!cam.records_video) return null;
+  const start = () => {
+    savePref('zwo_rec_s', secs); savePref('zwo_rec_frames', frames);
+    cmd({ record: { on: true, duration_s: Number(secs) || 0, max_frames: Number(frames) || 0 } });
+  };
+  if (cam.recording) {
+    const fill = Number(cam.record_pool) ? Number(cam.record_queued) / Number(cam.record_pool) : 0;
+    const left = Number(cam.record_max_s) ? ` / ${Number(cam.record_max_s)} s` : '';
+    return html`<div class="toolbar rec">
+      <button class="btn rec on" aria-label="Stop recording" onClick=${() => cmd({ record: { on: false } })}>■ Stop</button>
+      <span class="mono small">${`${Number(cam.record_elapsed_s).toFixed(1)} s${left} · ${cam.record_frames}${Number(cam.record_max_frames) ? ` / ${cam.record_max_frames}` : ''} frames · ${mb(cam.record_bytes)} · `}
+        <span title=${`RAM buffer: ${cam.record_queued} of ${cam.record_pool} frames waiting for the disk`}>buffer <span class=${'fill' + (fill > 0.8 ? ' high' : '')}><span style=${`width:${Math.round(fill * 100)}%`}></span></span></span>
+        ${Number(cam.record_dropped) ? html`${' · '}<span class="bad">${cam.record_dropped} dropped</span>` : ''}${` · ${mb(cam.disk_free_bytes)} free`}</span>
+    </div>`;
+  }
+  return html`<div class="toolbar rec">
+    <button class="btn rec" disabled=${disabled} onClick=${start} title="Record the video stream to a SER file on the Pi (turns video on)">● Record SER</button>
+    <label>for <input type="number" min="0" step="1" style="width:70px" aria-label="Record seconds" value=${secs}
+      onInput=${(e) => setSecs(e.target.value)} /> s</label>
+    <label>max <input type="number" min="0" step="1" style="width:80px" aria-label="Record frames" value=${frames}
+      onInput=${(e) => setFrames(e.target.value)} /> frames</label>
+    <span class="small muted">0 = no limit${Number(cam.disk_free_bytes) ? ` · ${mb(cam.disk_free_bytes)} free` : ''}</span>
+  </div>`;
+}
+
 // ZWO camera on the C8 (`mount-svc zwo`): video with ROI, exposure, gain, offset, format, bin
-// and USB bandwidth; Capture saves one frame as FITS on the Pi.
+// and USB bandwidth; Capture saves one frame as FITS on the Pi; Record saves SER video.
 function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
   const [zoom, setZoom] = useState(false);
   const histRef = useRef(null);
@@ -285,18 +317,18 @@ function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
   const cmd = (args) => send('camera', { camera_id: cam.camera_id || 'zwo', ...args });
   const busy = cam.state === 'exposing' || cam.state === 'downloading';
   const off = !cam.connected || busy;
-  const field = (n) => {
+  const field = (n, locked = false) => {
     const st = (cam.settings || []).find((x) => x.name === n);
     if (!st) return null;
-    if (st.numeric) return html`<${NumSetting} st=${st} cmd=${cmd} disabled=${off} />`;
-    return html`<label>${st.label} <${Select} aria-label=${st.label} value=${st.value} disabled=${off || st.read_only}
+    if (st.numeric) return html`<${NumSetting} st=${st} cmd=${cmd} disabled=${off || locked} />`;
+    return html`<label>${st.label} <${Select} aria-label=${st.label} value=${st.value} disabled=${off || locked || st.read_only}
       options=${st.choices.map((c) => [c, c])} onChange=${(v) => cmd({ set: { name: n, value: v } })} /></label>`;
   };
   const roi = cam.roi?.length === 4 ? `${cam.roi[2]}×${cam.roi[3]}` : '';
   const temp = Number.isFinite(cam.temperature_c) ? ` · ${Number(cam.temperature_c).toFixed(1)} °C` : '';
   return html`<section class="panel camera wide zwo" aria-label="C8 camera">
     <div class="head"><h2>${title}</h2>
-      <span class="small mono">${cam.connected ? `${cam.state}${cam.liveview ? ` · ${Number(cam.fps).toFixed(1)} fps` : ''}${Number(cam.dropped) ? ` · ${cam.dropped} dropped` : ''}${temp}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
+      <span class="small mono">${cam.recording ? html`<span class="recdot">● REC</span> ` : ''}${cam.connected ? `${cam.state}${cam.liveview ? ` · ${Number(cam.fps).toFixed(1)} fps` : ''}${Number(cam.dropped) ? ` · ${cam.dropped} dropped` : ''}${temp}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
     <div class=${'camview img' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre" onClick=${() => setZoom(!zoom)}>
       ${shown ? html`<img alt=${live ? 'live view' : 'last frame'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
         : html`<span>${cam.connected ? 'Start video, or capture a frame.' : cam.message}${cam.connected ? '' : hint}</span>`}
@@ -304,14 +336,17 @@ function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
     </div>
     <div class="toolbar">
       <button class=${'btn' + (cam.liveview ? ' on' : '')} aria-pressed=${!!cam.liveview} disabled=${off}
+        title=${cam.recording ? 'turning video off stops the recording' : ''}
         onClick=${() => cmd({ liveview: !cam.liveview })}>${cam.liveview ? 'Video on' : 'Video'}</button>
       ${field('exposure_ms')}${field('gain')}${field('offset')}
     </div>
-    <div class="toolbar">
-      ${field('image_type')}${field('bin')}${field('roi')}${field('bandwidth')}
+    <div class="toolbar" title=${cam.recording ? 'format, bin and ROI are fixed while recording' : ''}>
+      ${field('image_type', cam.recording)}${field('bin', cam.recording)}${field('roi', cam.recording)}
+      ${field('bandwidth')}
       <label class="check"><input type="checkbox" checked=${!!cam.stretch} onChange=${(e) => cmd({ stretch: e.target.checked })} /> Stretch</label>
       <button class="btn primary" disabled=${off} onClick=${() => cmd({ capture: { bulb_s: 0 } })}>${busy ? 'Saving…' : 'Capture frame'}</button>
     </div>
+    <${RecordBar} cam=${cam} cmd=${cmd} disabled=${off} />
     <div class="dslr-info">
       <canvas ref=${histRef} class="hist" role="img" aria-label="Histogram"></canvas>
       <span class="small mono">${shown ? `median ${Math.round(shown.median)} · 99% ${Math.round(shown.p99)} · saturated ${(shown.saturated_frac * 100).toFixed(2)}%` : ''}

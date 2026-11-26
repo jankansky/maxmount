@@ -189,3 +189,11 @@ label.imaging select { max-width: 330px; }
 .dslr-info > .small { min-width: 0; overflow-wrap: anywhere; }
 /* Red theme: camera images in red only, to keep dark adaptation. */
 [data-theme="red"] .camview img { filter: url(#red-only) brightness(0.85); }
+
+/* SER recording */
+.recdot { background: var(--stop); color: var(--stop-text); border-radius: 3px; padding: 0 4px; }
+.toolbar.rec .fill { display: inline-block; width: 60px; height: 8px; border: 1px solid var(--muted, #666); border-radius: 2px; vertical-align: middle; }
+.toolbar.rec .fill > span { display: block; height: 100%; background: var(--ok); }
+.toolbar.rec .fill.high > span { background: var(--warn); }
+.toolbar.rec .bad { color: var(--warn); }
+.btn.rec.on { background: var(--stop); color: var(--stop-text); border-color: var(--stop); }

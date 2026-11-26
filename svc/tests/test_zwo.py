@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """ZWO camera: FITS writing, the ASI224MC simulator (ROI, binning, formats, frame rate, video,
-capture), and the camera service with it over Zenoh."""
+capture, SER recording), and the camera service with it over Zenoh."""
+import json
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from maxmount_svc import zwo
+from maxmount_svc import ser, zwo
 from maxmount_svc.camera import CameraError, CameraService
 from maxmount_svc.mount import MountClient
 from maxmount_svc.proto import mpb
@@ -152,10 +154,83 @@ def test_zwo_service_end_to_end(served, tmp_path):  # noqa: F811
             status.wait(lambda s: s.captures == 1 and "from the video stream" in s.message)
             assert cmd(gui, "zwo", liveview=False).ok
             status.wait(lambda s: not s.liveview and s.fps == 0)
+            # Recording turns video on and writes SER plus a JSON sidecar.
+            r = cmd(gui, "zwo", record=mpb.Record(on=True, max_frames=30))
+            assert r.ok and "30 frames" in r.message, r.message
+            st = status.wait(lambda s: s.liveview and not s.recording and s.record_frames == 30 and "recorded 30 frames" in s.message)
+            assert st.records_video and st.record_file.endswith(".ser") and st.disk_free_bytes > 0
+            side = json.loads(Path(st.record_file).with_suffix(".json").read_text())
+            assert side["frames"] == 30 and side["stopped_because"] == "30 frames recorded" and side["settings"]["image_type"] == "RAW16"
+            assert ser.read_ser(st.record_file)["frames"].dtype == np.uint16
+            assert cmd(gui, "zwo", record=mpb.Record(on=True)).ok
+            status.wait(lambda s: s.recording and s.record_frames > 5)
+            assert not cmd(gui, "zwo", set=mpb.SetCameraSetting(name="bin", value="2")).ok
+            r = cmd(gui, "zwo", record=mpb.Record(on=False))
+            assert r.ok and r.message == "recording stopped"
+            status.wait(lambda s: not s.recording and "stopped" in s.message)
+            assert cmd(gui, "zwo", liveview=False).ok
         finally:
             status.sub.undeclare()
             frames.sub.undeclare()
             svc.close()
+
+
+def test_recording_formats_limits_and_locks(tmp_path):
+    b = zwo.ZwoSimBackend()
+    b.open()
+    try:
+        with pytest.raises(CameraError, match="start video"):
+            b.start_record(tmp_path, "x")
+        b.set("exposure_ms", "2")
+        for fmt, color, shape in (("RAW8", "BAYER_RGGB", (480, 640)), ("RAW16", "BAYER_RGGB", (480, 640)),
+                                  ("RGB24", "RGB", (480, 640, 3))):
+            b.set("image_type", fmt)
+            b.set_liveview(True)
+            rec = b.start_record(tmp_path, fmt, max_frames=25)
+            assert rec.wait(10) and rec.reason == "25 frames recorded"
+            r = ser.read_ser(rec.path)
+            assert rec.path.name == f"{fmt}_{fmt}_640x480_2ms.ser"
+            assert r["color"] == color and r["frames"].shape == (25, *shape) and len(r["times_ns"]) == 25
+            assert np.all(np.diff(r["times_ns"]) > 0) and r["frames"][24].max() > 0
+            b.set_liveview(False)
+        # A time limit; geometry is locked while recording; stopping video stops the recording.
+        b.set_liveview(True)
+        rec = b.start_record(tmp_path, "t", max_s=0.5)
+        assert b.recording and b.extra_status()["recording"]
+        with pytest.raises(CameraError, match="stop recording"):
+            b.set("roi", "320x240")
+        b.set("gain", "250")  # exposure and gain may change while recording
+        with pytest.raises(CameraError, match="already"):
+            b.start_record(tmp_path, "u")
+        assert rec.wait(10) and rec.reason == "0.5 s recorded" and 0.4 < rec.elapsed_s < 1.5
+        rec = b.start_record(tmp_path, "v")
+        time.sleep(0.2)
+        b.set_liveview(False)
+        assert rec.done.is_set() and rec.reason == "video stopped" and rec.frames > 0
+        st = b.extra_status()
+        assert not st["recording"] and st["record_frames"] == rec.frames
+    finally:
+        b.close()
+
+
+def test_recorder_drops_when_the_disk_is_slow_and_stops_when_full(tmp_path, monkeypatch):
+    rec = zwo.Recorder(tmp_path / "slow.ser", (4, 8), np.uint8, "MONO", 8, "test", pool_bytes=4 * 32)
+    assert rec.pool_frames == 4
+    slow = threading.Event()
+    real = rec.writer.write
+    monkeypatch.setattr(rec.writer, "write", lambda f, t: (slow.wait(5), real(f, t)))
+    for i in range(10):
+        rec.offer(np.full((4, 8), i, np.uint8), i + 1)
+    assert rec.accepted == 4 and rec.dropped == 6  # never blocks the video thread
+    slow.set()
+    rec.stop()
+    assert rec.wait(5) and rec.frames == 4
+    assert [int(f[0, 0]) for f in ser.read_ser(rec.path)["frames"]] == [0, 1, 2, 3]
+    with pytest.raises(CameraError, match="free"):
+        zwo.Recorder(tmp_path / "full.ser", (4, 8), np.uint8, "MONO", 8, "test", min_free_bytes=1 << 62)
+    rec = zwo.Recorder(tmp_path / "f.ser", (4, 8), np.uint8, "MONO", 8, "test")
+    rec.min_free_bytes = 1 << 62  # the disk fills up during the recording
+    assert rec.wait(5) and rec.reason.startswith("disk nearly full")
 
 
 def test_sdk_backend_reports_a_missing_library(tmp_path):
