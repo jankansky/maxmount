@@ -131,6 +131,7 @@ only the site terms.
 
 - **Widefield (GigE, Aravis):** 1–10 fps, plate solving for the pointing model, satellite acquisition. Own USB-Ethernet port, static IP, jumbo frames if supported, raised socket receive buffer.
 - **Narrow field (ZWO SDK):** region-of-interest capture at 50–200 fps during tracking; full frame for imaging and autofocus.
+- **The C8 carries one camera at a time:** the ZWO (tracking, lucky imaging) or the Nikon D500 (stills, over USB through libgphoto2). The widefield GigE camera has its own lens, like a finder scope, and stays mounted. The active imaging profile names the camera on the C8, so the GUI shows that camera's panel next to the widefield one.
 - **Live view:** compressed preview (JPEG or H.264) to the GUI over WiFi, never raw frames.
 - **Locked primary:** no commercial mirror-lock kit for the standard C8 was found; options are a DIY clamp or an EdgeHD 8. Until then, flip-side pointing terms and the camera loop absorb mirror shift.
 - **Corrector:** Starizona SCT Corrector IV, 0.63×, 27 mm image circle. Retailers list a C8 at 1450 mm f/7.1 or f/6.8, and one user measured about 1260 mm; the actual focal length depends on the spacing and will come from plate solving. Back focus is 90.3 mm from the camera-side thread base, held to ±2 mm for large sensors. That budget must hold the rotator, filter wheel or off-axis guider, and the camera's own back focus. At 1260–1450 mm, 3.76 µm pixels sample 0.62–0.53″.

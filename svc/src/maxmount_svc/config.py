@@ -90,6 +90,7 @@ class ImagingProfile:
     camera: str = ""
     note: str = ""
     color: bool = False  # Bayer sensor: each colour is sampled more coarsely than the pixel grid
+    camera_service: str = ""  # the camera service of the camera on the C8: dslr (D500) or zwo
 
     @property
     def arcsec_per_px(self) -> float:
@@ -106,6 +107,7 @@ class ImagingProfile:
     def summary(self) -> dict:
         d = {
             "key": self.key, "name": self.name, "camera": self.camera, "note": self.note, "color": self.color,
+            "camera_service": self.camera_service,
             "pixel_um": self.pixel_um, "focal_mm": self.focal_mm, "aperture_mm": self.aperture_mm,
             "f_ratio": round(self.f_ratio, 2), "arcsec_per_px": round(self.arcsec_per_px, 4),
             "diffraction_arcsec": round(RAD_AS * 550e-9 / (self.aperture_mm * 1e-3), 3),  # lambda/D at 550 nm
@@ -141,7 +143,8 @@ def _imaging(doc: dict) -> ImagingSettings:
                 key=str(key), name=str(v.get("name", key)), pixel_um=float(v["pixel_um"]), focal_mm=float(v["focal_mm"]),
                 aperture_mm=float(v.get("aperture_mm", 203.2)),
                 sensor_px=tuple(int(x) for x in v["sensor_px"]) if v.get("sensor_px") else None,
-                camera=str(v.get("camera", "")), note=str(v.get("note", "")), color=bool(v.get("color", False)))
+                camera=str(v.get("camera", "")), note=str(v.get("note", "")), color=bool(v.get("color", False)),
+                camera_service=str(v.get("camera_service", "")))
         except (KeyError, TypeError, ValueError) as e:
             raise ConfigError(f"imaging profile '{key}': {e}") from None
     if not profiles:

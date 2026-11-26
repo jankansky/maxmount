@@ -105,12 +105,15 @@ it, **Drives** (`#drives`).
   - **Hold** and **Park**;
   - target card and the **Choose target…** dialog (RA/Dec or az/el).
 - **Centre:**
-  - stills camera panel (Nikon D500 over USB, served by `mount-svc dslr`): live view (click
+  - widefield finder panel (a GigE camera with its own lens; placeholder until there is one);
+  - C8 camera panel: the camera on the C8, which the active imaging profile names
+    (`camera_service`), so switching the header's Imaging profile switches the panel:
+  - D500 (`dslr`, served by `mount-svc dslr`): live view (click
     the image for a 3× centre zoom to focus), ISO, shutter speed or a bulb time, image
     quality, where to save (camera card, Pi, or both), auto-stretch, Capture (Abort during a
     bulb exposure), and the last capture with its histogram, median, 99th percentile,
     saturated fraction and file names. In the red theme camera images are shown in red only;
-  - narrow-field ZWO panel (placeholder until its camera service exists);
+  - ZWO (`zwo`): placeholder until its camera service exists;
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets.
 - **Right column:**

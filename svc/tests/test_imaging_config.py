@@ -19,6 +19,8 @@ def test_reference_profiles():
     assert d["diffraction_arcsec"] == pytest.approx(0.558, abs=0.002) and d["fov_arcmin"] == [12.5, 9.3] and d["color"]
     assert im.profiles["high_res_224_barlow"].summary()["sampling_550"] < 1  # samples the diffraction limit
     assert im.profiles["deep_sky_d500"].summary()["fov_arcmin"] == [59.8, 39.9]
+    assert {p.key: p.camera_service for p in im.profiles.values()} == {
+        "deep_sky_224": "zwo", "high_res_224": "zwo", "high_res_224_barlow": "zwo", "deep_sky_d500": "dslr", "high_res_d500": "dslr"}
 
 
 def test_legacy_single_camera_and_errors():

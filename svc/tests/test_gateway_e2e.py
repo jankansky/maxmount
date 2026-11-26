@@ -61,8 +61,10 @@ def test_gateway_serves_the_gui_and_bridges_requests(stack):
                 async with http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
                     hello = await _recv_until(ws, lambda m: m["type"] == "hello")
                     assert hello["limits"]["el"]["max_deg"] == 180
-                    im = hello["imaging"]  # sim-altaz has no imaging section: one default profile
-                    assert im["active"] == "default" and im["profiles"][0]["arcsec_per_px"] == pytest.approx(206.265 * 3.76 / 1350, abs=1e-3)
+                    im = hello["imaging"]  # sim-altaz: the ZWO on the C8 by default, or the D500
+                    prof = {p["key"]: p for p in im["profiles"]}  # (the test fixture rewrites the file with sorted keys)
+                    assert im["active"] == "c8_zwo" and {k: p["camera_service"] for k, p in prof.items()} == {"c8_zwo": "zwo", "c8_d500": "dslr"}
+                    assert prof["c8_zwo"]["arcsec_per_px"] == pytest.approx(206.265 * 3.75 / 1350, abs=1e-3)
                     tel = await _recv_until(ws, lambda m: m["type"] == "telemetry")
                     assert {a["axis"] for a in tel["axes"]} == {"az", "el"}
                     assert "ra_h" in tel["sky"] and "lst_h" in tel["sky"]  # computed by the gateway

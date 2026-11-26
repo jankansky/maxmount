@@ -51,9 +51,11 @@ tracking:
   point_rate_hz: 20
   lookahead_s: 5
 
-# Narrow-field imaging profiles: the telescope + reducer/Barlow + camera combinations in use.
-# The GUI header switches the active one (remembered on the Pi); it sets pixel counts, the
-# passes size filter, and later the camera service's sampling and processing windows.
+# C8 imaging profiles: the telescope + reducer/Barlow + camera combinations in use (the ZWO or
+# the D500 is on the C8; the widefield GigE finder has its own lens). The GUI header switches
+# the active one (remembered on the Pi); it picks the Track screen's C8 camera panel
+# (camera_service) and sets pixel counts, the passes size filter, and later the camera
+# service's sampling and processing windows.
 # focal_mm: replace with the plate-solved value. C8 aperture 203.2 mm; diffraction limit
 # lambda/D = 0.56" at 550 nm, so Nyquist sampling needs pixels <= 0.28" (0.35" at 685 nm IR).
 imaging:
@@ -62,6 +64,7 @@ imaging:
     deep_sky_224:
       name: "C8 + 0.63x Corrector IV + ASI224MC"
       camera: ZWO ASI224MC            # IMX224 colour, 3.75 um, 1304 x 976, fast ROI
+      camera_service: zwo             # which camera service drives the C8 panel on the Track screen
       pixel_um: 3.75
       sensor_px: [1304, 976]
       color: true
@@ -70,6 +73,7 @@ imaging:
     high_res_224:
       name: "C8 native f/10 + ASI224MC"
       camera: ZWO ASI224MC
+      camera_service: zwo
       pixel_um: 3.75
       sensor_px: [1304, 976]
       color: true
@@ -78,6 +82,7 @@ imaging:
     high_res_224_barlow:
       name: "C8 + 1.5x Barlow (f/15) + ASI224MC"
       camera: ZWO ASI224MC
+      camera_service: zwo
       pixel_um: 3.75
       sensor_px: [1304, 976]
       color: true
@@ -86,6 +91,7 @@ imaging:
     deep_sky_d500:
       name: "C8 + 0.63x Corrector IV + Nikon D500"
       camera: Nikon D500              # APS-C, 4.22 um, 5568 x 3712, not astro-modified
+      camera_service: dslr            # mount-svc dslr
       pixel_um: 4.22
       sensor_px: [5568, 3712]
       color: true
@@ -94,6 +100,7 @@ imaging:
     high_res_d500:
       name: "C8 native f/10 + Nikon D500"
       camera: Nikon D500
+      camera_service: dslr
       pixel_um: 4.22
       sensor_px: [5568, 3712]
       color: true

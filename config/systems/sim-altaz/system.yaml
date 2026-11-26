@@ -22,6 +22,27 @@ site:
   humidity: 0.3
   dut1_s: auto            # UT1-UTC from IERS Bulletin A (cached weekly), or seconds
 
+# C8 imaging profiles (see the reference system): which camera is on the C8.
+imaging:
+  default: c8_zwo
+  profiles:
+    c8_zwo:
+      name: "C8 + 0.63x corrector + ASI224MC"
+      camera: ZWO ASI224MC
+      camera_service: zwo
+      pixel_um: 3.75
+      sensor_px: [1304, 976]
+      color: true
+      focal_mm: 1350
+    c8_d500:
+      name: "C8 + 0.63x corrector + Nikon D500"
+      camera: Nikon D500
+      camera_service: dslr
+      pixel_um: 4.22
+      sensor_px: [5568, 3712]
+      color: true
+      focal_mm: 1350
+
 tracking:
   horizon_min_el_deg: 10
   sun_min_sep_deg: 30

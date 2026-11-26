@@ -19,7 +19,8 @@ playwright = pytest.importorskip("playwright.sync_api")
 
 
 @pytest.fixture
-def gui_url(served):  # noqa: F811
+def gui_url(served, tmp_path, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))  # profile choices stay in the test
     client, settings = served
     svc = MountService(settings, client)
     svc.start()
@@ -351,13 +352,16 @@ def test_dslr_panel(gui_url, served, tmp_path, engine):  # noqa: F811
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
             page.goto(gui_url)
-            panel = page.locator("[aria-label='Stills camera']")
+            panel = page.locator("[aria-label='C8 camera']")
+            # The ZWO is on the C8 by default; the panel points at the D500 profile.
+            page.get_by_text("choose its profile in the header").wait_for(timeout=15000)
+            page.get_by_label("Imaging profile").select_option("c8_d500")
 
             def image_fits():
                 box, img = panel.locator(".camview").bounding_box(), panel.locator(".camview img").bounding_box()
                 assert img["width"] <= box["width"] + 1 and img["height"] <= box["height"] + 1, (box, img)
             panel.get_by_role("button", name="Live view").wait_for(timeout=15000)
-            page.wait_for_function("() => !document.querySelector(\"[aria-label='Stills camera'] button\").disabled", timeout=15000)
+            page.wait_for_function("() => !document.querySelector(\"[aria-label='C8 camera'] button\").disabled", timeout=15000)
             panel.get_by_role("button", name="Live view").click()
             panel.locator("img[alt='live view']").wait_for(timeout=10000)
             assert "LIVE" in panel.locator(".tag").text_content()
@@ -367,12 +371,12 @@ def test_dslr_panel(gui_url, served, tmp_path, engine):  # noqa: F811
             panel.locator(".camview").click()
             panel.get_by_role("button", name="Live view on").click()
             panel.get_by_label("ISO").select_option("400")
-            page.wait_for_function("() => document.querySelector(\"[aria-label='Stills camera'] select[aria-label=ISO]\").value === '400'", timeout=10000)
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] select[aria-label=ISO]\").value === '400'", timeout=10000)
             panel.get_by_role("button", name="Capture").click()
             panel.locator("img[alt='last capture']").wait_for(timeout=15000)
             assert "ISO 400" in panel.locator(".tag").text_content()
             image_fits()
-            page.wait_for_function("() => document.querySelector(\"[aria-label='Stills camera'] .dslr-info\").textContent.includes('capture 1')", timeout=10000)
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] .dslr-info\").textContent.includes('capture 1')", timeout=10000)
             assert "median" in panel.locator(".dslr-info").text_content()
             browser.close()
     finally:

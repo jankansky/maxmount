@@ -207,8 +207,8 @@ function DslrPanel({ cam, frames, send, now }) {
   useEffect(() => { if (histRef.current) drawHist(histRef.current, shown?.histogram || []); });
   const cmd = (args) => send('camera', { camera_id: cam?.camera_id || 'dslr', ...args });
   if (!cam) {
-    return html`<section class="panel camera wide" aria-label="Stills camera">
-      <div class="head"><h2>Stills camera</h2></div>
+    return html`<section class="panel camera wide" aria-label="C8 camera">
+      <div class="head"><h2>C8 · Nikon D500</h2></div>
       <div class="camview"><span>Camera service not running. Start it on the Pi with
         <code>mount-svc --system $SYS dslr</code> (add <code>--sim</code> to try it without a camera).</span></div>
     </section>`;
@@ -228,8 +228,8 @@ function DslrPanel({ cam, frames, send, now }) {
     savePref('dslr_bulb', bulb);
     cmd({ capture: { bulb_s: isBulb ? Number(bulb) : 0 } });
   };
-  return html`<section class="panel camera wide dslr" aria-label="Stills camera">
-    <div class="head"><h2>${cam.model || 'Stills camera'}</h2>
+  return html`<section class="panel camera wide dslr" aria-label="C8 camera">
+    <div class="head"><h2>C8 · ${cam.model || 'Nikon D500'}</h2>
       <span class="small mono">${cam.connected ? `${cam.state}${cam.battery_percent >= 0 ? ` · battery ${cam.battery_percent}%` : ''}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
     <div class=${'camview img' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre (focus)" onClick=${() => setZoom(!zoom)}>
       ${shown ? html`<img alt=${live ? 'live view' : 'last capture'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
@@ -258,15 +258,28 @@ function DslrPanel({ cam, frames, send, now }) {
   </section>`;
 }
 
-function CameraPanel({ title, info, square }) {
-  return html`<section class=${'panel camera ' + (square ? '' : 'wide')} aria-label=${title}>
+// The camera on the C8 is the ZWO or the D500; the active imaging profile says which
+// (camera_service), so the C8 panel follows the header's Imaging picker.
+const c8Service = (p) => p?.camera_service || (/nikon|canon|dslr/i.test(p?.camera || '') ? 'dslr' : 'zwo');
+
+function C8Panel({ profile, cameras, camFrames, send, now }) {
+  if (c8Service(profile) === 'dslr') return html`<${DslrPanel} cam=${cameras.dslr} frames=${camFrames.dslr} send=${send} now=${now} />`;
+  const hint = cameras.dslr?.connected
+    ? html`<br /><br />The D500 camera service is running: if the D500 is on the C8, choose its profile in the header's <b>Imaging</b> menu.` : '';
+  return html`<${CameraPanel} title=${`C8 · ${profile?.camera || 'ZWO'}`} label="C8 camera" info="ROI" square=${true}>
+    ZWO camera service not built yet.<br />Live frames, ROI tracking and click-to-point arrive with it.${hint}
+  <//>`;
+}
+
+function CameraPanel({ title, info, square, label, children }) {
+  return html`<section class=${'panel camera ' + (square ? '' : 'wide')} aria-label=${label || title}>
     <div class="head"><h2>${title}</h2><span class="small mono">${info}</span></div>
     <div class=${'camview ' + (square ? 'square' : '')}>
       ${square && html`<svg viewBox="0 0 100 100" aria-hidden="true">
         <line x1="50" y1="40" x2="50" y2="60" stroke="var(--accent)" stroke-width="0.4"></line>
         <line x1="40" y1="50" x2="60" y2="50" stroke="var(--accent)" stroke-width="0.4"></line>
         <circle cx="50" cy="50" r="5" fill="none" stroke="var(--accent)" stroke-width="0.4"></circle></svg>`}
-      <span>Camera service not running yet.<br/>Live frames, overlays and click-to-point arrive with camera-svc.</span>
+      <span>${children}</span>
     </div>
   </section>`;
 }
@@ -1004,8 +1017,10 @@ function App() {
       </aside>
       <main class="col-main">
         <div class="row">
-          <${DslrPanel} cam=${cameras.dslr} frames=${camFrames.dslr} send=${send} now=${now} />
-          <${CameraPanel} title="C8 · ZWO" info="ROI" square=${true} />
+          <${CameraPanel} title="Widefield finder" label="Widefield camera" info="GigE · own lens">
+            No widefield camera yet: a GigE camera with its own lens, like a finder scope, for acquisition and plate solving.
+          <//>
+          <${C8Panel} profile=${activeProfile(imaging)} cameras=${cameras} camFrames=${camFrames} send=${send} now=${now} />
         </div>
         <${Corrections} status=${status} send=${send} />
       </main>
