@@ -556,6 +556,7 @@ class Gateway:
         p = min(rep.passes, key=lambda q: abs(q.rise_ns - rise))
         d = _msg_to_dict(p)
         d.update(name=args.get("name", ""), line1=args["line1"], line2=args["line2"], planned=True)
+        self._add_lighting(d)
         mode = d["chosen"]["mode"] or "no plan fits"
         return True, f"planned {d['name']}: {mode}", {"pass": d}
 

@@ -270,7 +270,8 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
   const planRow = async (p) => {
     const r = await send('pass_plan', { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns, set_ns: p.set_ns });
     if (!r.ok) return;
-    const row = { ...r.data.pass, rise_ns: p.rise_ns, also: p.also };
+    // Keep what the search gave the row (lighting, merged modules) and add the plans.
+    const row = { ...p, ...r.data.pass, rise_ns: p.rise_ns, also: p.also, sunlit_frac: p.sunlit_frac, sun_el_deg: p.sun_el_deg };
     setRows((rs) => rs.map((x) => (passKey(x) === passKey(p) ? row : x)));
     updatePreviewRow(row);
   };

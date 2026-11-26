@@ -285,6 +285,8 @@ def test_passes_all_in_group_and_plan_on_demand(stack):
                 assert r["ok"], r
                 planned = r["data"]["pass"]
                 assert planned["planned"] is True and planned["plans"]
+                # Planning keeps the lighting (mount-svc's reply has none of its own).
+                assert abs(planned["sunlit_frac"] - p["sunlit_frac"]) < 0.05 and abs(planned["sun_el_deg"] - p["sun_el_deg"]) < 0.5
                 assert abs(int(planned["rise_ns"]) - int(p["rise_ns"])) < 2 * 10**9
 
                 watch = await req(4, "passes", {"group": "stations", "names": ["iss twin", "NOPE"], "hours": 24, "start_ns": str(epoch)})

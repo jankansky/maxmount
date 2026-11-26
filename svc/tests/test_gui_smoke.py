@@ -133,7 +133,10 @@ def test_pass_preview(gui_url, monkeypatch):
         rows = []
         for i, p in enumerate(rep.passes):
             d = gateway_mod._msg_to_dict(p)
-            d.update(name="ISS", pass_index=i, line1=ISS[0], line2=ISS[1])
+            d.update(name="ISS", pass_index=i, line1=ISS[0], line2=ISS[1], planned=True)
+            self._add_lighting(d)
+            if args.get("all"):  # like the real all-in-group search: planned on selection
+                d.update(planned=False, chosen={}, plans=[])
             rows.append(d)
         return True, f"{len(rows)} passes (test)", {"passes": rows, "names": ["ISS"]}
 
@@ -180,6 +183,15 @@ def test_pass_preview(gui_url, monkeypatch):
         assert seen[-1]["all"] is True and page.get_by_label("Add an object to the watch list").count() == 0
         page.get_by_label("Objects").select_option("watch")
         page.get_by_label("Max el ≥").select_option("0")
+        page.wait_for_timeout(1500)
+        page.get_by_label("Objects").select_option("all")
+        page.wait_for_timeout(1500)
+        lit_before = rows.nth(0).locator("td").nth(4).text_content()
+        rows.nth(0).click()
+        page.wait_for_function("() => !document.querySelector('[aria-label=Passes] tbody tr td:nth-child(6)').textContent.includes('—')", timeout=15000)
+        assert rows.nth(0).locator("td").nth(4).text_content() == lit_before != "?"
+        rows.nth(0).click()
+        page.get_by_label("Objects").select_option("watch")
         page.wait_for_timeout(1500)
         rows.nth(0).press("Enter")
         page.wait_for_selector("[aria-label='Pass details'] table.kv", timeout=15000)
