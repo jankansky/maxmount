@@ -33,6 +33,9 @@ svc/.venv/bin/mount-svc --system $SYS gui           # http://<pi>:8080
   - upcoming passes for a watch list from a CelesTrak group, with each plan's mode and peak rate,
     and **Track**. Click a pass (or select it and press Enter) to preview it on the sky dome and
     the ground track; click it again or press **Clear** to go back to the live target.
+    **Track** is refused while chrony's clock error bound is above `time.max_clock_error_us`
+    (10 µs needs GPS PPS). A warning above the table then shows the bound and what it means
+    along the track, with a **Track anyway** box that sends `allow_clock_error`.
 - **Right column:**
   - sky dome (north up, east left; horizon mask, keyhole, planned track, target, mount, Sun);
   - satellite ground track with visibility circle and night side;

@@ -144,3 +144,8 @@ dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 12px;
 .eventlog { max-height: 220px; overflow-y: auto; font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
 .eventlog .t { color: var(--muted); margin-right: 6px; }
 .eventlog .bad { color: var(--warn); }
+
+.clockwarn { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  border: 1px solid var(--warn); border-radius: 6px; padding: 6px 10px; margin: 4px 0; font-size: 13px; }
+.clockwarn label { white-space: nowrap; }
+.clockwarn input { min-height: 0; }

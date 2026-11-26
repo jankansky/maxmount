@@ -215,3 +215,30 @@ def test_pass_preview(stack):
             await gw.stop()
 
     asyncio.run(run())
+
+
+def test_track_anyway_passes_the_clock_override(stack):
+    """The GUI's 'Track anyway' sends allow_clock_error with track_tle; mount-svc must then skip
+    the clock gate (the 2008 test TLE may still be refused for other reasons)."""
+    from .conftest import ISS
+
+    settings = stack
+    port = 18000 + __import__("random").randint(4001, 6000)
+
+    async def run():
+        gw = await _session(settings, port)
+        try:
+            async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                replies = []
+                for i, allow in enumerate((False, True)):
+                    args = {"track_tle": {"name": "ISS", "line1": ISS[0], "line2": ISS[1]}, "allow_clock_error": allow}
+                    await ws.send_str(json.dumps({"type": "request", "id": i, "op": "target", "args": args}))
+                    replies.append(await _recv_until(ws, lambda m, i=i: m["type"] == "reply" and m["id"] == i))
+                if "clock" in replies[0]["message"]:
+                    assert "clock" not in replies[1]["message"], replies[1]
+                await ws.send_str(json.dumps({"type": "request", "id": 9, "op": "stop"}))
+                await _recv_until(ws, lambda m: m["type"] == "reply" and m["id"] == 9)
+        finally:
+            await gw.stop()
+
+    asyncio.run(run())

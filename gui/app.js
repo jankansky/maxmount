@@ -247,12 +247,21 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
   }, [group, names, hours, send]);
   const first = useRef(true);
   useEffect(() => { if (connected && first.current) { first.current = false; refresh(); } }, [connected]);
+  // Satellites need an accurate clock: mount-svc refuses a pass when chrony's error bound is
+  // above time.max_clock_error_us, unless the operator explicitly overrides it here.
+  const clk = status ? Number(status.clock_error_us) : -1;
+  const maxClk = hello?.max_clock_error_us ?? 10;
+  const clockBad = clk < 0 || clk > maxClk;
+  const [override, setOverride] = useState(false);
+  useEffect(() => { if (!clockBad) setOverride(false); }, [clockBad]);
   const track = async (p) => {
-    setPreview(null);
     setNote(`planning ${p.name}…`);
-    const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, pass_index: p.pass_index } });
+    const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, pass_index: p.pass_index },
+      allow_clock_error: clockBad && override });
     setNote(r.message);
+    if (r.ok) setPreview(null); // the live track takes over; keep the preview if refused
   };
+  const clkMs = clk / 1000;
   return html`<section class="panel" aria-label="Passes">
     <div class="tabs" role="tablist">
       <button role="tab" class="on">Upcoming passes</button>
@@ -267,6 +276,13 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
         ${[6, 12, 24, 48].map((h) => html`<option value=${h}>${h} h</option>`)}</select></label>
       <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
     </div>
+    ${clockBad && html`<div class="clockwarn" role="status">
+      <span><b>Clock not good enough for satellites:</b> ${clk < 0 ? 'error unknown (chrony not answering)'
+        : `chrony's error bound is ±${clkMs >= 1 ? clkMs.toFixed(1) + ' ms' : clk.toFixed(0) + ' µs'}, limit ${maxClk} µs`}.
+        ${clk > 0 ? `At 1°/s that is up to ${(clkMs * 3.6).toFixed(clkMs * 3.6 < 10 ? 1 : 0)}″ along the track; the timing correction can take it out.` : ''}</span>
+      <label class="arm"><input type="checkbox" checked=${override} onChange=${(e) => setOverride(e.target.checked)} />
+        Track anyway</label>
+    </div>`}
     <span class="small">${note}${rows.length ? ' · click a pass to preview it on the Sky and Ground track views' : ''}</span>
     <div class="tablewrap"><table>
       <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>

@@ -158,6 +158,13 @@ def test_pass_preview(gui_url, monkeypatch):
         page.get_by_role("tab", name="Ground track").click()
         page.get_by_text("AOS to LOS").wait_for(timeout=5000)
         page.get_by_role("tab", name="Sky").click()
+        # A refused Track (the test machine's clock is unknown or too poor, and the 2008 pass is
+        # long over) must leave the preview in place.
+        rows.nth(1).get_by_role("button", name="Track").click()
+        page.wait_for_function("() => document.querySelector('.statusline').textContent.includes('target: refused')", timeout=15000)
+        assert page.locator(".preview-note").is_visible()
+        if page.locator(".clockwarn").count():
+            page.locator(".clockwarn").get_by_label("Track anyway").check()
         rows.nth(1).click()  # again: clears
         page.wait_for_selector(".preview-note", state="detached", timeout=5000)
         rows.nth(0).press("Enter")
