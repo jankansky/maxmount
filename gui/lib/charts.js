@@ -147,7 +147,9 @@ function endLabels(ctx, [ax, ay], [lx, ly], color) {
 }
 
 // Sun-altitude bands: day, civil (0 to -6), nautical (-6 to -12), astronomical (-12 to -18)
-// twilight, night. Drawn at half resolution and scaled up smoothly; cached per canvas and minute.
+// twilight, night, with the band edges drawn as lines (the day/night line strongest) so they
+// show even where shading barely changes a dark map. One cell per CSS pixel (scaled up
+// smoothly on high-DPI screens); cached per canvas and minute (~10 ms to draw).
 const BAND_ALPHA = [0, 0.22, 0.36, 0.5, 0.62];
 const layerCache = new WeakMap();
 function parseColor(str) {
@@ -157,24 +159,37 @@ function parseColor(str) {
   return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)).concat(1);
 }
 function lightingLayer(canvas, w, h, sun, lonAt, latAt, now) {
-  const day = cssVar('--day'), night = cssVar('--night-deep');
-  const key = [w, h, lonAt(0), lonAt(w), latAt(0), Math.floor(now.getTime() / 60000), day, night].join('|');
+  const day = cssVar('--day'), night = cssVar('--night-deep'), term = cssVar('--terminator'), twl = cssVar('--twilight-line');
+  const key = [w, h, lonAt(0), lonAt(w), latAt(0), Math.floor(now.getTime() / 60000), day, night, term, twl].join('|');
   const hit = layerCache.get(canvas);
   if (hit && hit.key === key) return hit.img;
-  const cw = Math.max(1, Math.ceil(w / 2)), ch = Math.max(1, Math.ceil(h / 2));
+  const cw = Math.max(1, Math.ceil(w)), ch = Math.max(1, Math.ceil(h));
   const img = document.createElement('canvas'); img.width = cw; img.height = ch;
   const g = img.getContext('2d'), data = g.createImageData(cw, ch), px = data.data;
   const [dr, dg, db, da] = parseColor(day), [nr, ng, nb] = parseColor(night);
   const sd = Math.sin(sun.dec * DEG), cd = Math.cos(sun.dec * DEG);
+  const bands = new Uint8Array(cw * ch);
   for (let j = 0; j < ch; j++) {
     const lat = latAt(((j + 0.5) / ch) * h) * DEG, sl = Math.sin(lat), cl = Math.cos(lat);
     for (let i = 0; i < cw; i++) {
       const H = (lonAt(((i + 0.5) / cw) * w) - sun.lon) * DEG;
       const alt = Math.asin(sl * sd + cl * cd * Math.cos(H)) / DEG;
+      const band = alt >= 0 ? 0 : alt > -6 ? 1 : alt > -12 ? 2 : alt > -18 ? 3 : 4;
+      bands[j * cw + i] = band;
       const o = 4 * (j * cw + i);
-      if (alt >= 0) { px[o] = dr; px[o + 1] = dg; px[o + 2] = db; px[o + 3] = Math.round(da * 255); continue; }
-      const band = alt > -6 ? 1 : alt > -12 ? 2 : alt > -18 ? 3 : 4;
+      if (band === 0) { px[o] = dr; px[o + 1] = dg; px[o + 2] = db; px[o + 3] = Math.round(da * 255); continue; }
       px[o] = nr; px[o + 1] = ng; px[o + 2] = nb; px[o + 3] = Math.round(BAND_ALPHA[band] * 255);
+    }
+  }
+  const lines = [parseColor(term), parseColor(twl)];
+  for (let j = 0; j < ch; j++) {
+    for (let i = 0; i < cw; i++) {
+      const b = bands[j * cw + i];
+      const r = i + 1 < cw ? bands[j * cw + i + 1] : b, d = j + 1 < ch ? bands[(j + 1) * cw + i] : b;
+      if (r === b && d === b) continue;
+      const [lr, lg, lb, la] = lines[Math.min(b, r, d) === 0 ? 0 : 1];
+      const o = 4 * (j * cw + i);
+      px[o] = lr; px[o + 1] = lg; px[o + 2] = lb; px[o + 3] = Math.round(la * 255);
     }
   }
   g.putImageData(data, 0, 0);
@@ -238,6 +253,15 @@ export function drawMap(canvas, { land = null, track = null, now = new Date() })
   // Daylight, twilight and night at `now` (the pass time for a preview), and the subsolar point.
   const s = subsolar(now);
   ctx.drawImage(lightingLayer(canvas, w, h, s, (px) => lon0 + (px / w) * span, (py) => top - (py / h) * (span / 2), now), 0, 0, w, h);
+  // Coastlines on top, so land and sea stay distinct at night and in the dim red theme.
+  if (land) {
+    ctx.strokeStyle = cssVar('--coast'); ctx.lineWidth = 1;
+    for (const k of copies) for (const ring of land.rings) {
+      ctx.beginPath();
+      ring.forEach(([lo, la], i) => (i ? ctx.lineTo(X(lo + k), Y(la)) : ctx.moveTo(X(lo + k), Y(la))));
+      ctx.closePath(); ctx.stroke();
+    }
+  }
   ctx.fillStyle = cssVar('--sun'); ctx.strokeStyle = cssVar('--sun'); ctx.lineWidth = 1.5;
   for (const k of [-360, 0, 360]) {
     const [x, y] = [X(s.lon + k), Y(s.dec)];
