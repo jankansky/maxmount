@@ -81,7 +81,8 @@ export function drawStrip(canvas, { series, now_s, span_s = 60, unit = '', minTo
 }
 
 // Sky dome: az/el polar projection, north up, east left (as seen looking up from below).
-export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount = null, sun = null }) {
+// preview: [[az, el, sunlit], ...] for a pass being looked at (solid where sunlit, dotted in shadow).
+export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount = null, sun = null, preview = null }) {
   const { ctx, w, h } = setup(canvas, 1);
   const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 18;
   const P = (az, el) => {
@@ -110,6 +111,17 @@ export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount =
     path.forEach(([az, el], i) => { const [x, y] = P(az, Math.max(el, -2)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
     ctx.stroke(); ctx.setLineDash([]);
   }
+  if (preview && preview.length > 1) {
+    ctx.strokeStyle = cssVar('--accent2');
+    for (let i = 1; i < preview.length; i++) {
+      const lit = preview[i][2];
+      ctx.lineWidth = lit ? 3 : 2; ctx.setLineDash(lit ? [] : [3, 4]);
+      const [x0, y0] = P(preview[i - 1][0], preview[i - 1][1]), [x1, y1] = P(preview[i][0], preview[i][1]);
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    endLabels(ctx, P(...preview[0]), P(...preview[preview.length - 1]), cssVar('--accent2'));
+  }
   if (sun && sun[1] > -2) {
     const [x, y] = P(sun[0], sun[1]); ctx.fillStyle = cssVar('--sun'); ctx.beginPath(); ctx.arc(x, y, 7, 0, 2 * Math.PI); ctx.fill();
   }
@@ -122,6 +134,16 @@ export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount =
     ctx.beginPath(); ctx.arc(x, y, 10, 0, 2 * Math.PI); ctx.stroke();
     for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { ctx.beginPath(); ctx.moveTo(x + dx * 13, y + dy * 13); ctx.lineTo(x + dx * 19, y + dy * 19); ctx.stroke(); }
   }
+}
+
+// AOS (open circle) and LOS (filled circle) markers with labels.
+function endLabels(ctx, [ax, ay], [lx, ly], color) {
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(ax, ay, 5, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(lx, ly, 5, 0, 2 * Math.PI); ctx.fill();
+  ctx.font = SANS; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = cssVar('--text');
+  ctx.fillText('AOS', ax + 8, ay); ctx.fillText('LOS', lx + 8, ly);
 }
 
 // Approximate subsolar point (good to ~0.1 deg; enough to shade the night side).
@@ -139,68 +161,112 @@ function subsolar(date) {
   return { lon, dec };
 }
 
+const wrap180 = (d) => ((((d % 360) + 540) % 360) - 180);
+
+// World map (plate carree). A pass preview (track.aos set) is unwrapped around the site and
+// zoomed to fit the pass; a live target's track is shown on the whole world.
 export function drawMap(canvas, { land = null, track = null, now = new Date() }) {
   const { ctx, w, h } = setup(canvas, 0.5);
-  const X = (lon) => ((lon + 180) / 360) * w, Y = (lat) => ((90 - lat) / 180) * h;
+  const pv = !!track?.aos;
+  let pts = track?.points || [];
+  let lon0 = -180, span = 360, top = 90; // view: left edge, longitude span, top latitude (lat span = span / 2)
+  let site = track?.site, aos, los, now0 = track?.now;
+  if (pv) {
+    const c = site[0];
+    const near = (lo) => c + wrap180(lo - c);
+    let prev = null;
+    pts = pts.map(([lo, la, f]) => { prev = prev === null ? near(lo) : prev + wrap180(lo - prev); return [prev, la, f]; });
+    [aos, los, now0] = [track.aos, track.los, track.now].map(([lo, la]) => [near(lo), la]);
+    // Fit the pass (above the mask), the site and the visibility circle; the tails run off the edges.
+    const vis = pts.filter((q) => q[2] === 1), v = track.visibility_deg;
+    const lons = vis.map((q) => q[0]).concat(c, now0[0] - v / Math.cos(Math.min(80, Math.abs(now0[1])) * DEG), now0[0] + v / Math.cos(Math.min(80, Math.abs(now0[1])) * DEG));
+    const lats = vis.map((q) => q[1]).concat(site[1], now0[1] - v, now0[1] + v);
+    const pad = 4;
+    const [l0, l1] = [Math.min(...lons) - pad, Math.max(...lons) + pad], [b0, b1] = [Math.min(...lats) - pad, Math.max(...lats) + pad];
+    span = Math.min(360, Math.max(40, l1 - l0, 2 * (b1 - b0)));
+    lon0 = (l0 + l1) / 2 - span / 2;
+    top = Math.min(90, Math.max(-90 + span / 2, (b0 + b1) / 2 + span / 4));
+  }
+  const X = (lon) => ((lon - lon0) / span) * w, Y = (lat) => ((top - lat) / (span / 2)) * h;
+  // World copies needed to cover the view.
+  const copies = [-360, 0, 360].filter((k) => lon0 < 180 + k && lon0 + span > -180 + k);
   ctx.fillStyle = cssVar('--sea'); ctx.fillRect(0, 0, w, h);
   if (land) {
     ctx.fillStyle = cssVar('--land');
-    for (const ring of land.rings) {
+    for (const k of copies) for (const ring of land.rings) {
       ctx.beginPath();
-      ring.forEach(([lo, la], i) => (i ? ctx.lineTo(X(lo), Y(la)) : ctx.moveTo(X(lo), Y(la))));
+      ring.forEach(([lo, la], i) => (i ? ctx.lineTo(X(lo + k), Y(la)) : ctx.moveTo(X(lo + k), Y(la))));
       ctx.fill();
     }
   }
   // Night side.
   const s = subsolar(now);
-  ctx.fillStyle = cssVar('--night'); ctx.beginPath();
+  ctx.fillStyle = cssVar('--night');
   const north = s.dec < 0; // the dark pole
-  ctx.moveTo(0, north ? 0 : h);
-  for (let lon = -180; lon <= 180; lon += 3) {
-    const H = (lon - s.lon) * DEG;
-    const lat = Math.atan(-Math.cos(H) / Math.tan(Math.abs(s.dec) < 0.05 ? 0.05 * DEG : s.dec * DEG)) / DEG;
-    ctx.lineTo(X(lon), Y(lat));
+  for (const k of copies) {
+    ctx.beginPath(); ctx.moveTo(X(-180 + k), Y(north ? 90 : -90));
+    for (let lon = -180; lon <= 180; lon += 3) {
+      const H = (lon - s.lon) * DEG;
+      const lat = Math.atan(-Math.cos(H) / Math.tan(Math.abs(s.dec) < 0.05 ? 0.05 * DEG : s.dec * DEG)) / DEG;
+      ctx.lineTo(X(lon + k), Y(lat));
+    }
+    ctx.lineTo(X(180 + k), Y(north ? 90 : -90)); ctx.closePath(); ctx.fill();
   }
-  ctx.lineTo(w, north ? 0 : h); ctx.closePath(); ctx.fill();
-  // Graticule.
+  // Graticule (30 deg on the world view, 10 deg zoomed in).
+  const step = span > 120 ? 30 : 10;
   ctx.strokeStyle = cssVar('--grid'); ctx.lineWidth = 1;
-  for (let lon = -150; lon <= 150; lon += 30) { ctx.beginPath(); ctx.moveTo(X(lon) + 0.5, 0); ctx.lineTo(X(lon) + 0.5, h); ctx.stroke(); }
-  for (let lat = -60; lat <= 60; lat += 30) { ctx.beginPath(); ctx.moveTo(0, Y(lat) + 0.5); ctx.lineTo(w, Y(lat) + 0.5); ctx.stroke(); }
+  for (let lon = Math.ceil(lon0 / step) * step; lon < lon0 + span; lon += step) {
+    if (span > 120 && Math.abs(wrap180(lon)) === 180) continue;
+    ctx.beginPath(); ctx.moveTo(Math.round(X(lon)) + 0.5, 0); ctx.lineTo(Math.round(X(lon)) + 0.5, h); ctx.stroke();
+  }
+  for (let lat = -90 + step; lat < 90; lat += step) {
+    if (span > 120 && Math.abs(lat) === 90) continue;
+    ctx.beginPath(); ctx.moveTo(0, Math.round(Y(lat)) + 0.5); ctx.lineTo(w, Math.round(Y(lat)) + 0.5); ctx.stroke();
+  }
+  if (span <= 120) {
+    ctx.fillStyle = cssVar('--muted'); ctx.font = SANS; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+    for (let lon = Math.ceil(lon0 / 20) * 20; lon < lon0 + span; lon += 20) {
+      const v = wrap180(lon); ctx.fillText(`${Math.abs(v)}°${v < 0 ? 'W' : v > 0 && v < 180 ? 'E' : ''}`, X(lon) + 3, h - 14);
+    }
+    for (let lat = -80; lat <= 80; lat += 20) if (Y(lat) > 10 && Y(lat) < h - 20) ctx.fillText(`${Math.abs(lat)}°${lat < 0 ? 'S' : lat > 0 ? 'N' : ''}`, 3, Y(lat) + 2);
+  }
   if (!track) return;
-  // Ground track: flown solid, upcoming dashed; break at the date line.
-  const acc = cssVar('--accent');
+  // Live target: flag 0 = flown (solid), 1 = upcoming (dashed). Pass preview:
+  // flag 1 = above the horizon mask (thick, solid), 0 = before/after the pass (thin, dashed).
+  const acc = cssVar(pv ? '--accent2' : '--accent');
   for (const future of [0, 1]) {
-    ctx.strokeStyle = acc; ctx.lineWidth = future ? 1.5 : 2.2; ctx.setLineDash(future ? [5, 4] : []);
+    const solid = pv ? future === 1 : future === 0;
+    ctx.strokeStyle = acc; ctx.lineWidth = pv ? (solid ? 3 : 1.2) : (solid ? 2.2 : 1.5); ctx.setLineDash(solid ? [] : [5, 4]);
     ctx.beginPath();
-    const pts = track.points;
     let prev = null;
     for (let i = 0; i < pts.length; i++) {
       const [lo, la, f] = pts[i];
-      // The dashed (future) line starts at the last flown point so the two join up.
-      const include = f === future || (future === 1 && f === 0 && i + 1 < pts.length && pts[i + 1][2] === 1);
+      // Each style's line starts at the last point of the other so the two join up.
+      const include = f === future || (i + 1 < pts.length && pts[i + 1][2] === future);
       if (!include) { prev = null; continue; }
-      if (prev !== null && Math.abs(lo - prev) > 180) prev = null; // date line
+      if (prev !== null && Math.abs(lo - prev) > 180) prev = null; // date line (live view)
       if (prev === null) ctx.moveTo(X(lo), Y(la)); else ctx.lineTo(X(lo), Y(la));
       prev = lo;
     }
     ctx.stroke();
   }
   ctx.setLineDash([]);
-  // Visibility circle around the sub-satellite point.
-  const [lo0, la0] = track.now;
+  // Visibility circle around the sub-satellite point (now, or at culmination for a preview).
+  const [lo0, la0] = now0;
   const r = track.visibility_deg * DEG;
   ctx.strokeStyle = cssVar('--ok'); ctx.lineWidth = 1.5; ctx.beginPath();
   for (let b = 0; b <= 360; b += 5) {
-    const br = b * DEG, la1 = la0 * DEG, lo1 = lo0 * DEG;
+    const br = b * DEG, la1 = la0 * DEG;
     const lat = Math.asin(Math.sin(la1) * Math.cos(r) + Math.cos(la1) * Math.sin(r) * Math.cos(br));
-    const lon = lo1 + Math.atan2(Math.sin(br) * Math.sin(r) * Math.cos(la1), Math.cos(r) - Math.sin(la1) * Math.sin(lat));
-    const x = X((((lon / DEG) + 540) % 360) - 180), y = Y(lat / DEG);
+    const dlon = Math.atan2(Math.sin(br) * Math.sin(r) * Math.cos(la1), Math.cos(r) - Math.sin(la1) * Math.sin(lat)) / DEG;
+    const x = X(lo0 + dlon), y = Y(lat / DEG);
     b ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.stroke();
-  ctx.fillStyle = acc; ctx.beginPath(); ctx.arc(X(lo0), Y(la0), 4.5, 0, 2 * Math.PI); ctx.fill();
-  if (track.site) {
-    ctx.fillStyle = cssVar('--warn'); const [sx, sy] = [X(track.site[0]), Y(track.site[1])];
+  if (pv) endLabels(ctx, [X(aos[0]), Y(aos[1])], [X(los[0]), Y(los[1])], acc);
+  else { ctx.fillStyle = acc; ctx.beginPath(); ctx.arc(X(lo0), Y(la0), 4.5, 0, 2 * Math.PI); ctx.fill(); }
+  if (site) {
+    ctx.fillStyle = cssVar('--warn'); const [sx, sy] = [X(site[0]), Y(site[1])];
     ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 5, sy + 4); ctx.lineTo(sx - 5, sy + 4); ctx.closePath(); ctx.fill();
   }
 }

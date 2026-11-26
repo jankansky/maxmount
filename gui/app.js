@@ -231,7 +231,7 @@ function Corrections({ status, send }) {
   </section>`;
 }
 
-function Passes({ hello, send, status, connected }) {
+function Passes({ hello, send, status, connected, preview, setPreview }) {
   const [group, setGroup] = useState(loadPref('group', 'stations'));
   const [names, setNames] = useState(loadPref('watch', 'ISS (ZARYA), CSS (TIANHE)'));
   const [hours, setHours] = useState(loadPref('hours', 12));
@@ -248,6 +248,7 @@ function Passes({ hello, send, status, connected }) {
   const first = useRef(true);
   useEffect(() => { if (connected && first.current) { first.current = false; refresh(); } }, [connected]);
   const track = async (p) => {
+    setPreview(null);
     setNote(`planning ${p.name}…`);
     const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, pass_index: p.pass_index } });
     setNote(r.message);
@@ -266,7 +267,7 @@ function Passes({ hello, send, status, connected }) {
         ${[6, 12, 24, 48].map((h) => html`<option value=${h}>${h} h</option>`)}</select></label>
       <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
     </div>
-    <span class="small">${note}</span>
+    <span class="small">${note}${rows.length ? ' · click a pass to preview it on the Sky and Ground track views' : ''}</span>
     <div class="tablewrap"><table>
       <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>
       <tbody class="mono">
@@ -275,14 +276,18 @@ function Passes({ hello, send, status, connected }) {
           const current = status?.tle_line1 && status.tle_line1 === p.line1 && status?.plan?.start_ns && Number(status.plan.start_ns) >= Number(p.rise_ns) - 5e9 && Number(status.plan.start_ns) <= Number(p.set_ns);
           const plan = chosen.mode ? (chosen.mode === 'over_the_top' ? html`<span class="warn">over-top ${Number(chosen.max_error_deg).toFixed(1)}°</span>` : chosen.mode)
             : html`<span class="warn" title=${(p.plans || []).map((x) => x.mode + ': ' + (x.problems || []).join(', ')).join('\n')}>no plan fits</span>`;
-          return html`<tr class=${current ? 'current' : ''}>
+          const key = passKey(p), sel = preview?.key === key;
+          const pick = () => setPreview(sel ? null : p);
+          return html`<tr class=${(current ? 'current ' : '') + (sel ? 'selected' : '')} tabindex="0" aria-selected=${sel}
+            title=${sel ? 'click to clear the preview' : 'click to preview this pass'}
+            onClick=${pick} onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}>
             <td style="font-family:inherit">${p.name}</td>
             <td>${utc(p.rise_ns)}</td>
             <td>${dur((Number(p.set_ns) - Number(p.rise_ns)) / 1e9)}</td>
             <td>${Number(p.max_el_deg).toFixed(1)}°</td>
             <td>${plan}</td>
             <td>${chosen.mode ? Number(chosen.peak_az_deg_s).toFixed(2) + ' °/s' : '—'}</td>
-            <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${!chosen.mode} onClick=${() => track(p)}>Track</button>`}</td>
+            <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${!chosen.mode} onClick=${(e) => { e.stopPropagation(); track(p); }}>Track</button>`}</td>
           </tr>`;
         })}
       </tbody>
@@ -290,7 +295,9 @@ function Passes({ hello, send, status, connected }) {
   </section>`;
 }
 
-function SkyPanel({ status, tel, hello, track, land, theme }) {
+const passKey = (p) => `${p.name}|${p.rise_ns}`;
+
+function SkyPanel({ status, tel, hello, track, land, theme, preview, clearPreview }) {
   const [view, setView] = useState(loadPref('skyview', 'sky'));
   const ref = useRef(null);
   useEffect(() => {
@@ -303,9 +310,10 @@ function SkyPanel({ status, tel, hello, track, land, theme }) {
         target: status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
         mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
         sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
+        preview: preview?.sky || null,
       });
     } else {
-      drawMap(c, { land, track: status?.tle_line1 ? track : null });
+      drawMap(c, { land, track: preview?.ground || (status?.tle_line1 ? track : null) });
     }
   });
   const pick = (v) => { setView(v); savePref('skyview', v); };
@@ -315,7 +323,12 @@ function SkyPanel({ status, tel, hello, track, land, theme }) {
       <button role="tab" class=${view === 'map' ? 'on' : ''} aria-selected=${view === 'map'} onClick=${() => pick('map')}>Ground track</button>
     </div>
     <canvas ref=${ref} role="img" aria-label=${view === 'sky' ? 'Sky dome: mount, target, planned track, horizon mask' : 'World map: satellite ground track and visibility circle'}></canvas>
-    <span class="small">${view === 'sky' ? 'North up, east left · dashed: planned track · ring: mount · dot: target' : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask' : 'Ground track shows when the target is a satellite.'}</span>
+    ${preview && html`<div class="preview-note"><span><b>Preview:</b> ${preview.label}</span>
+      <button class="btn" style="min-height:26px" onClick=${clearPreview}>Clear</button></div>`}
+    <span class="small">${view === 'sky'
+      ? 'North up, east left · dashed: planned track · ring: mount · dot: target' + (preview ? ' · orange: preview, solid where sunlit, dotted in shadow' : '')
+      : preview ? 'thick: above the horizon mask, AOS to LOS · thin: 15 min either side · circle: visible at culmination'
+      : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask' : 'Ground track shows when the target is a satellite, or when you click a pass.'}</span>
   </section>`;
 }
 
@@ -387,6 +400,8 @@ function App() {
   const [tel, setTel] = useState(null);
   const [status, setStatus] = useState(null);
   const [track, setTrack] = useState(null);
+  const [preview, setPreviewState] = useState(null);
+  const previewReq = useRef(null);
   const [line, setLine] = useState('connecting to the gateway…');
   const [land, setLand] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -447,6 +462,14 @@ function App() {
     return r;
   }, []);
   const act = (op) => send(op, {});
+  const setPreview = useCallback(async (p) => {
+    previewReq.current = p ? passKey(p) : null;
+    if (!p) { setPreviewState(null); return; }
+    const r = await send('pass_preview', { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns, culmination_ns: p.culmination_ns, set_ns: p.set_ns });
+    if (previewReq.current !== passKey(p)) return; // a newer click won
+    setPreviewState(r.ok ? { key: passKey(p), ...r.data,
+      label: `${p.name}, AOS ${utc(p.rise_ns)} UTC, max el ${Number(p.max_el_deg).toFixed(0)}°, ${r.data.sunlit}` } : null);
+  }, [send]);
   const openDialog = () => dialogRef.current?.showModal();
 
   return html`
@@ -467,10 +490,11 @@ function App() {
           <${CameraPanel} title="C8 · ZWO" info="ROI" square=${true} />
         </div>
         <${Corrections} status=${status} send=${send} />
-        <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} />
+        <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview} />
       </main>
       <aside class="col-right">
-        <${SkyPanel} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} theme=${theme} />
+        <${SkyPanel} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} theme=${theme}
+          preview=${preview} clearPreview=${() => setPreview(null)} />
         <${TelemetryPanel} status=${status} history=${history.current} now=${now} />
       </aside>
     </div>

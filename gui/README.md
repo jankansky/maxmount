@@ -31,10 +31,14 @@ svc/.venv/bin/mount-svc --system $SYS gui           # http://<pi>:8080
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets;
   - upcoming passes for a watch list from a CelesTrak group, with each plan's mode and peak rate,
-    and **Track**.
+    and **Track**. Click a pass (or select it and press Enter) to preview it on the sky dome and
+    the ground track; click it again or press **Clear** to go back to the live target.
 - **Right column:**
   - sky dome (north up, east left; horizon mask, keyhole, planned track, target, mount, Sun);
   - satellite ground track with visibility circle and night side;
+  - pass preview, in orange: on the sky dome, the path from AOS to LOS, solid where the
+    satellite is sunlit and dotted in shadow; on the map, zoomed to the pass, the ground track
+    above the horizon mask, 15 min either side, and the visibility circle at culmination;
   - target telemetry (rates, range, range rate, altitude, TLE age);
   - strip charts with grid lines: following error, and loop wake-up latency.
 

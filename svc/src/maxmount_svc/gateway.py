@@ -15,6 +15,7 @@ WebSocket messages (JSON):
   client -> server
     {"type": "request", "id", "op", "args"}
       op: target (TargetCommand as JSON), stop, hold, park, passes, tle_names,
+          pass_preview {name, line1, line2, rise_ns, culmination_ns, set_ns} (ground track + sky path),
           enable/disable {axis} and fault_reset (straight to mount-rt),
           jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
 """
@@ -206,27 +207,62 @@ class Gateway:
             sat = SatelliteTarget(self.settings.site, st.tle_line1, st.tle_line2)
             now = time.time_ns()
             t = np.arange(now - 50 * 60 * NS, now + 50 * 60 * NS, 30 * NS, dtype=np.int64)
-            jd1, jd2 = astro.utc_jd(t)
-            _e, r, _v = sat._sat.sgp4_array(jd1, jd2)
-            pef = astro.teme_to_pef(np.asarray(r), t, self.settings.site.dut1_s)
-            lon = np.degrees(np.arctan2(pef[:, 1], pef[:, 0]))
-            lat = np.degrees(np.arctan2(pef[:, 2], np.hypot(pef[:, 0], pef[:, 1])))
-            alt = np.linalg.norm(pef, axis=1) - 6378.137
+            lon, lat, alt = self._subsat(sat, t)
             i_now = int(np.argmin(np.abs(t - now)))
-            # Ground radius from which the satellite is above the horizon mask.
-            mask = math.radians(self.settings.tracking.horizon_min_el_deg)
-            re = 6378.137
-            lam = math.acos(re / (re + alt[i_now]) * math.cos(mask)) - mask
             self._track_msg = {
                 "type": "groundtrack",
                 "points": [[round(float(a), 2), round(float(b), 2), int(ti > now)] for a, b, ti in zip(lon, lat, t)],
                 "now": [round(float(lon[i_now]), 2), round(float(lat[i_now]), 2)],
-                "visibility_deg": math.degrees(lam),
+                "visibility_deg": self._visibility_deg(alt[i_now]),
                 "site": [self.settings.site.longitude_deg, self.settings.site.latitude_deg],
             }
             self._broadcast(self._track_msg)
         except Exception:  # noqa: BLE001 - a ground track must not take the gateway down
             log.exception("ground track failed")
+
+    def _subsat(self, sat: SatelliteTarget, t):
+        """Sub-satellite longitude, latitude (deg) and altitude (km) at times t (ns)."""
+        jd1, jd2 = astro.utc_jd(t)
+        _e, r, _v = sat._sat.sgp4_array(jd1, jd2)
+        pef = astro.teme_to_pef(np.asarray(r), t, self.settings.site.dut1_s)
+        lon = np.degrees(np.arctan2(pef[:, 1], pef[:, 0]))
+        lat = np.degrees(np.arctan2(pef[:, 2], np.hypot(pef[:, 0], pef[:, 1])))
+        return lon, lat, np.linalg.norm(pef, axis=1) - 6378.137
+
+    def _visibility_deg(self, alt_km: float) -> float:
+        """Ground radius (deg of arc) from which the satellite is above the horizon mask."""
+        mask = math.radians(self.settings.tracking.horizon_min_el_deg)
+        re = 6378.137
+        return math.degrees(math.acos(re / (re + alt_km) * math.cos(mask)) - mask)
+
+    def _pass_preview(self, args: dict):
+        """Ground track and sky path of one pass, for previewing it before tracking it."""
+        if self.settings.site is None:
+            return False, "no site location", None
+        sat = SatelliteTarget(self.settings.site, str(args["line1"]), str(args["line2"]), name=str(args.get("name", "")))
+        rise, set_ = int(args["rise_ns"]), int(args["set_ns"])
+        culm = int(args.get("culmination_ns") or (rise + set_) // 2)
+        # Ground track: the pass plus 15 min either side; flag 1 = above the horizon mask.
+        t = np.arange(rise - 15 * 60 * NS, set_ + 15 * 60 * NS, 20 * NS, dtype=np.int64)
+        t = np.unique(np.concatenate([t, [rise, culm, set_]]))
+        lon, lat, alt = self._subsat(sat, t)
+        i_c = int(np.searchsorted(t, culm))
+        ground = {
+            "points": [[round(float(a), 2), round(float(b), 2), int(rise <= ti <= set_)] for a, b, ti in zip(lon, lat, t)],
+            "now": [round(float(lon[i_c]), 2), round(float(lat[i_c]), 2)],
+            "aos": [round(float(lon[int(np.searchsorted(t, rise))]), 2), round(float(lat[int(np.searchsorted(t, rise))]), 2)],
+            "los": [round(float(lon[int(np.searchsorted(t, set_))]), 2), round(float(lat[int(np.searchsorted(t, set_))]), 2)],
+            "visibility_deg": self._visibility_deg(float(alt[i_c])),
+            "site": [self.settings.site.longitude_deg, self.settings.site.latitude_deg],
+        }
+        # Sky path from rise to set (apparent az/el) and whether the satellite is sunlit.
+        ts = np.unique(np.concatenate([np.arange(rise, set_, 5 * NS, dtype=np.int64), [set_]]))
+        az, el = sat.observed(ts)
+        lit = sat.sunlit(ts)
+        sky = [[round(math.degrees(a), 2), round(math.degrees(e), 2), int(bool(s))] for a, e, s in zip(az, el, lit)]
+        n_lit = int(np.count_nonzero(lit))
+        sunlit = "sunlit" if n_lit == len(ts) else "in shadow" if n_lit == 0 else "partly sunlit"
+        return True, f"preview {sat.name}: {sunlit}", {"ground": ground, "sky": sky, "sunlit": sunlit}
 
     # -- WebSocket ------------------------------------------------------------------------------
     def _broadcast(self, msg: dict) -> None:
@@ -339,6 +375,8 @@ class Gateway:
             return True, f"{len(sats)} objects ({note})", {"names": sorted(sats)}
         if op == "passes":
             return self._passes(args)
+        if op == "pass_preview":
+            return self._pass_preview(args)
         return False, f"unknown op '{op}'", None
 
     def _passes(self, args: dict):

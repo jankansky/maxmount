@@ -90,6 +90,11 @@ th { text-align: left; color: var(--muted); font-size: 11px; text-transform: upp
 td { padding: 6px 8px; border-top: 1px solid var(--line); }
 tr.lit { background: var(--row-lit); }
 tr.current { background: var(--ok-bg); }
+.tablewrap tbody tr { cursor: pointer; }
+.tablewrap tbody tr:hover { background: var(--panel2, rgba(127,127,127,.08)); }
+tr.selected, .tablewrap tbody tr.selected:hover { box-shadow: inset 3px 0 0 var(--accent2); background: color-mix(in srgb, var(--accent2) 14%, transparent); }
+tbody tr:focus-visible { outline: 2px solid var(--accent2); outline-offset: -2px; }
+.preview-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
 td .warn { color: var(--warn); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 

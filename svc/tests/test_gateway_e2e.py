@@ -167,3 +167,51 @@ def test_drives_ops_enable_disable_and_jog(stack):
             await gw.stop()
 
     asyncio.run(run())
+
+
+def test_pass_preview(stack):
+    """Clicking a pass in the GUI asks for its ground track and sky path."""
+    import numpy as np
+
+    from maxmount_svc.planner import find_passes
+    from maxmount_svc.targets import SatelliteTarget
+
+    from .conftest import ISS
+
+    settings = stack
+    sat = SatelliteTarget(settings.site, *ISS, name="ISS")
+    passes = find_passes(sat, sat.epoch_ns, sat.epoch_ns + 24 * 3600 * 10**9, np.radians(settings.tracking.horizon_min_el_deg))
+    p = next(q for q in passes if q.rise_ns > sat.epoch_ns)  # a whole pass
+    port = 18000 + __import__("random").randint(2001, 4000)
+
+    async def run():
+        gw = await _session(settings, port)
+        try:
+            async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                args = {"name": "ISS", "line1": ISS[0], "line2": ISS[1], "rise_ns": str(p.rise_ns),
+                        "culmination_ns": str(p.culmination_ns), "set_ns": str(p.set_ns)}
+                await ws.send_str(json.dumps({"type": "request", "id": 1, "op": "pass_preview", "args": args}))
+                rep = await _recv_until(ws, lambda m: m["type"] == "reply" and m["id"] == 1)
+                assert rep["ok"], rep
+                d = rep["data"]
+                g = d["ground"]
+                # 15 min either side of the pass at 20 s steps, plus the pass itself.
+                assert len(g["points"]) > 90
+                assert {f for *_ll, f in g["points"]} == {0, 1}
+                assert g["points"][0][2] == 0 and g["points"][-1][2] == 0
+                assert 9 < g["visibility_deg"] < 13  # ISS at ~350 km above a 10 deg mask: ~11 deg of arc
+                for lon, lat in (g["aos"], g["los"], g["now"]):
+                    assert -180 <= lon <= 180 and -52 <= lat <= 52  # ISS inclination 51.6 deg
+                sky = d["sky"]
+                mask = settings.tracking.horizon_min_el_deg
+                assert abs(sky[0][1] - mask) < 0.5 and abs(sky[-1][1] - mask) < 0.5
+                assert abs(max(e for _a, e, _s in sky) - np.degrees(p.max_el)) < 0.2
+                assert d["sunlit"] in ("sunlit", "in shadow", "partly sunlit") and d["sunlit"] in rep["message"]
+
+                await ws.send_str(json.dumps({"type": "request", "id": 2, "op": "pass_preview", "args": {"name": "x"}}))
+                rep = await _recv_until(ws, lambda m: m["type"] == "reply" and m["id"] == 2)
+                assert not rep["ok"]
+        finally:
+            await gw.stop()
+
+    asyncio.run(run())

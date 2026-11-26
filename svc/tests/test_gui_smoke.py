@@ -112,3 +112,57 @@ def test_drives_screen(gui_url):
         assert page.locator("[aria-label='Target']").is_visible()
         browser.close()
     assert not errors, errors
+
+
+def test_pass_preview(gui_url, monkeypatch):
+    """Clicking a pass previews it on the Sky and Ground track views. The test TLE is from 2008,
+    so the passes op is replaced by one that searches from the TLE epoch (no network needed)."""
+    from maxmount_svc.proto import mpb
+    from maxmount_svc.targets import SatelliteTarget
+
+    from .conftest import ISS
+
+    def passes(self, args):
+        epoch = SatelliteTarget(self.settings.site, *ISS).epoch_ns
+        req = mpb.PassesRequest(tle=mpb.Tle(name="ISS", line1=ISS[0], line2=ISS[1]), hours=24, start_ns=epoch)
+        rep = mpb.PassesReply()
+        rep.ParseFromString(self.client.query("svc/passes", req.SerializeToString(), timeout=60))
+        rows = []
+        for i, p in enumerate(rep.passes):
+            d = gateway_mod._msg_to_dict(p)
+            d.update(name="ISS", pass_index=i, line1=ISS[0], line2=ISS[1])
+            rows.append(d)
+        return True, f"{len(rows)} passes (test)", {"passes": rows}
+
+    import maxmount_svc.gateway as gateway_mod
+    monkeypatch.setattr(Gateway, "_passes", passes)
+    errors = []
+    with playwright.sync_playwright() as p:
+        try:
+            browser = p.chromium.launch()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no Chromium for Playwright: {e}")
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.goto(gui_url)
+        rows = page.locator("[aria-label=Passes] tbody tr")
+        try:
+            rows.first.wait_for(timeout=60000)
+        except Exception:
+            raise AssertionError(page.locator("[aria-label=Passes] .small").first.text_content() + " | " + page.locator(".statusline").text_content())
+        rows.nth(1).click()
+        page.wait_for_selector(".preview-note", timeout=15000)
+        assert "ISS" in page.locator(".preview-note").text_content()
+        assert rows.nth(1).get_attribute("aria-selected") == "true"
+        page.get_by_role("tab", name="Ground track").click()
+        page.get_by_text("AOS to LOS").wait_for(timeout=5000)
+        page.get_by_role("tab", name="Sky").click()
+        rows.nth(1).click()  # again: clears
+        page.wait_for_selector(".preview-note", state="detached", timeout=5000)
+        rows.nth(0).press("Enter")
+        page.wait_for_selector(".preview-note", timeout=15000)
+        page.locator(".preview-note").get_by_role("button", name="Clear").click()
+        page.wait_for_selector(".preview-note", state="detached", timeout=5000)
+        browser.close()
+    assert not errors, errors
