@@ -57,6 +57,20 @@ it, **Drives** (`#drives`).
   - **Track** is refused while chrony's clock error bound is above `time.max_clock_error_us`
     (10 µs needs GPS PPS). A warning above the table then shows the bound and what it means
     along the track, with a **Track anyway** box that sends `allow_clock_error`.
+- **Conjunctions (SOCRATES)** tab: CelesTrak SOCRATES Plus close approaches (active
+  satellites against the whole catalogue, 7 days ahead, within 5 km) that the site can see:
+  the event above the horizon mask at the time of closest approach (TCA).
+  - **Next**, **Miss distance ≤**, **Lighting** (at TCA) and **Mag** (either object) filter
+    the list. Co-orbiting pairs (relative speed < 0.1 km/s: formation flyers, docked or
+    co-located satellites) are hidden unless ticked.
+  - **Sep ≤** is the most the two can appear apart at TCA (miss distance over range).
+  - Click one to fetch both objects' element sets from SOCRATES: the map and sky show the
+    tracked object's pass, the other object's path (thin) and the TCA (✕); the details card
+    gives the smallest separation as seen from the site and when, brightness, the maximum
+    collision probability and the age of the elements.
+  - **Track** follows the object with an element set in the CelesTrak `active` group
+    (usually the active payload) through the pass that contains TCA.
+  - The gateway downloads the SOCRATES CSV (~20 MB) at most once per SOCRATES run (8 h).
 - **Pass details:** AOS, culmination and LOS times and directions, duration, lighting, the
   chosen plan and its peak rates, or why no plan fits.
 

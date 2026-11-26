@@ -82,7 +82,9 @@ export function drawStrip(canvas, { series, now_s, span_s = 60, unit = '', minTo
 
 // Sky dome: az/el polar projection, north up, east left (as seen looking up from below).
 // preview: [[az, el, sunlit], ...] for a pass being looked at (solid where sunlit, dotted in shadow).
-export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount = null, sun = null, preview = null }) {
+// preview2: a second object's path (conjunctions), thinner and in the accent colour.
+// mark: [az, el] of an event (the time of closest approach), drawn as a cross.
+export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount = null, sun = null, preview = null, preview2 = null, mark = null }) {
   const { ctx, w, h } = setup(canvas, 1);
   const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 18;
   const P = (az, el) => {
@@ -122,6 +124,18 @@ export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount =
     ctx.setLineDash([]);
     endLabels(ctx, P(...preview[0]), P(...preview[preview.length - 1]), cssVar('--accent2'));
   }
+  if (preview2 && preview2.length > 1) {
+    ctx.strokeStyle = cssVar('--accent'); ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let up = false;
+    for (const [az, el] of preview2) {
+      if (el < -1) { up = false; continue; }
+      const [x, y] = P(az, el);
+      up ? ctx.lineTo(x, y) : ctx.moveTo(x, y); up = true;
+    }
+    ctx.stroke();
+  }
+  if (mark) cross(ctx, P(mark[0], mark[1]), cssVar('--text'));
   if (sun && sun[1] > -2) {
     const [x, y] = P(sun[0], sun[1]); ctx.fillStyle = cssVar('--sun'); ctx.beginPath(); ctx.arc(x, y, 7, 0, 2 * Math.PI); ctx.fill();
   }
@@ -134,6 +148,14 @@ export function drawSky(canvas, { maskEl = 10, path = [], target = null, mount =
     ctx.beginPath(); ctx.arc(x, y, 10, 0, 2 * Math.PI); ctx.stroke();
     for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { ctx.beginPath(); ctx.moveTo(x + dx * 13, y + dy * 13); ctx.lineTo(x + dx * 19, y + dy * 19); ctx.stroke(); }
   }
+}
+
+// An event marker: a cross with a ring, labelled TCA.
+function cross(ctx, [x, y], color) {
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x - 7, y - 7); ctx.lineTo(x + 7, y + 7); ctx.moveTo(x + 7, y - 7); ctx.lineTo(x - 7, y + 7); ctx.stroke();
+  ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(x, y, 11, 0, 2 * Math.PI); ctx.stroke();
+  ctx.font = SANS; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText('TCA', x + 14, y);
 }
 
 // AOS (open circle) and LOS (filled circle) markers with labels.
@@ -324,6 +346,7 @@ export function drawMap(canvas, { land = null, track = null, now = new Date() })
   }
   ctx.stroke();
   if (pv) endLabels(ctx, [X(aos[0]), Y(aos[1])], [X(los[0]), Y(los[1])], acc);
+  if (pv && track.mark) cross(ctx, [X(site[0] + wrap180(track.mark[0] - site[0])), Y(track.mark[1])], cssVar('--text'));
   else { ctx.fillStyle = acc; ctx.beginPath(); ctx.arc(X(lo0), Y(la0), 4.5, 0, 2 * Math.PI); ctx.fill(); }
   if (site) {
     ctx.fillStyle = cssVar('--warn'); const [sx, sy] = [X(site[0]), Y(site[1])];

@@ -243,7 +243,40 @@ function Corrections({ status, send }) {
   </section>`;
 }
 
-function Passes({ hello, send, status, connected, preview, setPreview, updatePreviewRow, setScreen }) {
+// Satellites need an accurate clock: mount-svc refuses a pass when chrony's error bound is
+// above time.max_clock_error_us, unless the operator explicitly overrides it.
+function useClockGate(status, hello) {
+  const clk = status ? Number(status.clock_error_us) : -1;
+  const maxClk = hello?.max_clock_error_us ?? 10;
+  const clockBad = clk < 0 || clk > maxClk;
+  const [override, setOverride] = useState(false);
+  useEffect(() => { if (!clockBad) setOverride(false); }, [clockBad]);
+  const clkMs = clk / 1000;
+  const banner = clockBad && html`<div class="clockwarn" role="status">
+    <span><b>Clock not good enough for satellites:</b> ${clk < 0 ? 'error unknown (chrony not answering)'
+      : `chrony's error bound is ±${clkMs >= 1 ? clkMs.toFixed(1) + ' ms' : clk.toFixed(0) + ' µs'}, limit ${maxClk} µs`}.
+      ${clk > 0 ? `At 1°/s that is up to ${(clkMs * 3.6).toFixed(clkMs * 3.6 < 10 ? 1 : 0)}″ along the track; the timing correction can take it out.` : ''}</span>
+    <label class="arm"><input type="checkbox" checked=${override} onChange=${(e) => setOverride(e.target.checked)} />
+      Track anyway</label>
+  </div>`;
+  return { allow: clockBad && override, banner };
+}
+
+function ListTabs({ tab, setTab }) {
+  const t = (id, label) => html`<button role="tab" class=${tab === id ? 'on' : ''} aria-selected=${tab === id} onClick=${() => setTab(id)}>${label}</button>`;
+  return html`<div class="tabs" role="tablist">
+    ${t('passes', 'Upcoming passes')}${t('conj', 'Conjunctions (SOCRATES)')}
+    <button role="tab" disabled title="not built yet">Aircraft (ADS-B)</button>
+  </div>`;
+}
+
+function GoTrack({ tracked, setTracked, status, setScreen }) {
+  return tracked && status?.target_name && html`<div class="gotrack" role="status">
+    <span><b>${status.target_name}</b>: ${status.message || 'planned'}</span>
+    <button class="btn primary" onClick=${() => { setTracked(''); setScreen('track'); }}>Open the Track screen →</button></div>`;
+}
+
+function Passes({ hello, send, status, connected, preview, setPreview, updatePreviewRow, setScreen, tab, setTab }) {
   const [group, setGroup] = useState(loadPref('group', 'stations'));
   const [names, setNames] = useState(loadPref('watch', 'ISS (ZARYA), CSS (TIANHE)'));
   const [hours, setHours] = useState(loadPref('hours', 12));
@@ -283,28 +316,17 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
     setRows((rs) => rs.map((x) => (passKey(x) === passKey(p) ? row : x)));
     updatePreviewRow(row);
   };
-  // Satellites need an accurate clock: mount-svc refuses a pass when chrony's error bound is
-  // above time.max_clock_error_us, unless the operator explicitly overrides it here.
-  const clk = status ? Number(status.clock_error_us) : -1;
-  const maxClk = hello?.max_clock_error_us ?? 10;
-  const clockBad = clk < 0 || clk > maxClk;
-  const [override, setOverride] = useState(false);
-  useEffect(() => { if (!clockBad) setOverride(false); }, [clockBad]);
+  const clock = useClockGate(status, hello);
   const track = async (p) => {
     setNote(`planning ${p.name}…`);
     const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns },
-      allow_clock_error: clockBad && override });
+      allow_clock_error: clock.allow });
     setNote(r.message);
     if (r.ok) { setPreview(null); setTracked(p.name); } // the live track takes over; keep the preview if refused
   };
   const [tracked, setTracked] = useState('');
-  const clkMs = clk / 1000;
-  return html`<section class="panel" aria-label="Passes">
-    <div class="tabs" role="tablist">
-      <button role="tab" class="on">Upcoming passes</button>
-      <button role="tab" disabled title="not built yet">Conjunctions (SOCRATES)</button>
-      <button role="tab" disabled title="not built yet">Aircraft (ADS-B)</button>
-    </div>
+  return html`<section class="panel" aria-label="Passes" hidden=${tab !== 'passes'}>
+    <${ListTabs} tab=${tab} setTab=${setTab} />
     <div class="toolbar">
       <label>CelesTrak group <${Select} value=${group} onChange=${setGroup}
         options=${(hello?.tle_groups || ['stations']).map((g) => [g, g])} /></label>
@@ -327,16 +349,8 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
           onChange=${(e) => { addName(e.target.value.trim()); e.target.value = ''; }} /></label>
       <datalist id="tle-names">${nameOpts}</datalist>
     </div>`}
-    ${clockBad && html`<div class="clockwarn" role="status">
-      <span><b>Clock not good enough for satellites:</b> ${clk < 0 ? 'error unknown (chrony not answering)'
-        : `chrony's error bound is ±${clkMs >= 1 ? clkMs.toFixed(1) + ' ms' : clk.toFixed(0) + ' µs'}, limit ${maxClk} µs`}.
-        ${clk > 0 ? `At 1°/s that is up to ${(clkMs * 3.6).toFixed(clkMs * 3.6 < 10 ? 1 : 0)}″ along the track; the timing correction can take it out.` : ''}</span>
-      <label class="arm"><input type="checkbox" checked=${override} onChange=${(e) => setOverride(e.target.checked)} />
-        Track anyway</label>
-    </div>`}
-    ${tracked && status?.target_name && html`<div class="gotrack" role="status">
-      <span><b>${status.target_name}</b>: ${status.message || 'planned'}</span>
-      <button class="btn primary" onClick=${() => { setTracked(''); setScreen('track'); }}>Open the Track screen →</button></div>`}
+    ${clock.banner}
+    <${GoTrack} tracked=${tracked} setTracked=${setTracked} status=${status} setScreen=${setScreen} />
     <span class="small">${note}${rows.length ? ' · click a pass to preview it' + (all ? ' and plan it' : '') : ''}</span>
     <div class="tablewrap"><table>
       <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th title="share of the pass with the satellite sunlit; hover a value for the Sun's elevation">Sunlit</th><th title="brightest predicted visual magnitude (≈: estimated from radar size)">Mag</th><th title="largest angular size, at the closest point (≈: estimated from radar size)">Size</th><th>Plan</th><th></th></tr></thead>
@@ -373,6 +387,92 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
 }
 
 const passKey = (p) => `${p.name}|${p.rise_ns}`;
+const conjKey = (c) => `conj|${c.cat1}|${c.cat2}|${c.tca_ns}`;
+const CONJ_HOURS = [[12, '12 h'], [24, '24 h'], [48, '48 h'], [96, '4 d'], [168, '7 d']];
+const CONJ_RANGE = [0.1, 0.2, 0.5, 1, 2, 5].map((r) => [r, `${r} km`]);
+// SATCAT operational status in brackets after a SOCRATES name, e.g. 'STARLINK-1 [+]'.
+const STATUS = { '+': 'operational', '-': 'not operational', P: 'partially operational', B: 'backup', S: 'spare',
+  X: 'extended mission', D: 'decayed', '?': 'unknown status' };
+const conjName = (n) => {
+  const m = n.match(/^(.*?)\s*\[(.)\]$/);
+  return m ? html`${m[1]} <span class="muted" title=${STATUS[m[2]] || ''}>[${m[2]}]</span>` : n;
+};
+
+function Conjunctions({ hello, send, status, connected, preview, setConjPreview, setScreen, tab, setTab }) {
+  const [hours, setHours] = useState(loadPref('cj_hours', 48));
+  const [maxRange, setMaxRange] = useState(loadPref('cj_range', 1));
+  const [lighting, setLighting] = useState(loadPref('cj_light', 'sunlit'));
+  const [maxMag, setMaxMag] = useState(loadPref('cj_mag', 'any'));
+  const [coorb, setCoorb] = useState(loadPref('cj_coorb', false));
+  const [rows, setRows] = useState([]);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [tracked, setTracked] = useState('');
+  const clock = useClockGate(status, hello);
+  const seq = useRef(0);
+  const refresh = async () => {
+    savePref('cj_hours', hours); savePref('cj_range', maxRange); savePref('cj_light', lighting); savePref('cj_mag', maxMag); savePref('cj_coorb', coorb);
+    const id = ++seq.current;
+    setBusy(true); setNote('screening SOCRATES for conjunctions visible from here (the first time downloads ~20 MB)…');
+    const r = await send('conjunctions', { hours: Number(hours), max_range_km: Number(maxRange), lighting, max_mag: maxMag, coorbiting: coorb });
+    if (id !== seq.current) return;
+    setBusy(false); setNote(r.message);
+    setRows(r.ok ? r.data.conjunctions : []);
+  };
+  // Search when the tab is first opened and whenever a selector changes.
+  useEffect(() => { if (connected && tab === 'conj') refresh(); }, [connected, tab === 'conj', hours, maxRange, lighting, maxMag, coorb]);
+  const track = async (c) => {
+    const d = preview?.key === conjKey(c) ? preview : await setConjPreview(c);
+    if (!d) return;
+    const p = d.row;
+    setNote(`planning ${p.name} through the conjunction…`);
+    // rise_ns = TCA: mount-svc tracks the pass that contains it.
+    const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, rise_ns: c.tca_ns }, allow_clock_error: clock.allow });
+    setNote(r.message);
+    if (r.ok) setTracked(p.name);
+  };
+  const mag = (c) => (c.mag == null ? '—' : `${(c.mag === c.mag1 ? c.mag_estimated1 : c.mag_estimated2) ? '≈' : ''}${Number(c.mag).toFixed(1)}`);
+  return html`<section class="panel" aria-label="Conjunctions" hidden=${tab !== 'conj'}>
+    <${ListTabs} tab=${tab} setTab=${setTab} />
+    <div class="toolbar">
+      <label>Next <${Select} value=${hours} onChange=${setHours} options=${CONJ_HOURS} /></label>
+      <label>Miss distance ≤ <${Select} value=${maxRange} onChange=${setMaxRange} options=${CONJ_RANGE} /></label>
+      <label>Lighting <${Select} value=${lighting} onChange=${setLighting} options=${LIGHT_OPTS}
+        title="at the time of closest approach: sunlit, and for dark sky the Sun below −6° at the site" /></label>
+      <label>Mag <${Select} value=${maxMag} onChange=${setMaxMag} options=${MAG_OPTS} title="either object predicted at least this bright" /></label>
+      <label class="check"><input type="checkbox" checked=${coorb} onChange=${(e) => setCoorb(e.target.checked)} />
+        co-orbiting pairs</label>
+      <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
+    </div>
+    ${clock.banner}
+    <${GoTrack} tracked=${tracked} setTracked=${setTracked} status=${status} setScreen=${setScreen} />
+    <span class="small">${note}${rows.length ? ' · click a conjunction to see both objects and how close they look from here' : ''}</span>
+    <div class="tablewrap"><table>
+      <thead><tr><th>TCA (UTC)</th><th>Objects</th><th title="distance between the two objects at closest approach">Miss</th>
+        <th title="relative speed">Speed</th><th>El / az</th><th title="largest separation as seen from the site at TCA (miss distance over range)">Sep ≤</th>
+        <th title="brighter object, predicted at TCA">Mag</th><th></th></tr></thead>
+      <tbody class="mono">
+        ${!rows.length && html`<tr class="empty"><td colspan="8">${busy ? 'Searching…' : html`No conjunctions. ${note}
+          <br /><span class="muted">Try a longer window, a larger miss distance or Lighting: any.</span>`}</td></tr>`}
+        ${rows.map((c) => {
+          const key = conjKey(c), sel = preview?.key === key;
+          const pick = () => setConjPreview(sel ? null : c);
+          return html`<tr class=${sel ? 'selected' : ''} tabindex="0" aria-selected=${sel} onClick=${pick}
+            onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}>
+            <td>${utc(c.tca_ns)}</td>
+            <td style="font-family:inherit">${conjName(c.name1)} × ${conjName(c.name2)}</td>
+            <td>${c.range_km < 1 ? `${Math.round(c.range_km * 1000)} m` : `${Number(c.range_km).toFixed(2)} km`}</td>
+            <td>${Number(c.speed_km_s).toFixed(c.speed_km_s < 1 ? 2 : 1)}</td>
+            <td>${Math.round(c.el_deg)}° / ${Math.round(c.az_deg)}°</td>
+            <td>${fmtAng(c.sep_max_arcsec)}</td>
+            <td>${mag(c)}</td>
+            <td><button class="btn" style="min-height:28px" onClick=${(e) => { e.stopPropagation(); track(c); }}>Track</button></td>
+          </tr>`;
+        })}
+      </tbody>
+    </table></div>
+  </section>`;
+}
 
 function SkyPanel({ status, tel, hello, track, land }) {
   const [view, setView] = useState(loadPref('skyview', 'sky'));
@@ -419,8 +519,11 @@ function PassViews({ status, tel, hello, track, land, preview }) {
       mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
       sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
       preview: preview?.sky || null,
+      preview2: preview?.sky2 || null,
+      mark: preview?.tca_azel || null,
     });
   });
+  const conj = preview?.kind === 'conj';
   return html`<div class="pv-views">
     <section class="panel" aria-label="Ground track">
       <div class="head"><h2>Ground track</h2><span class="small">${preview ? preview.row.name : status?.tle_line1 ? status.target_name + ' (live)' : ''}</span></div>
@@ -432,11 +535,38 @@ function PassViews({ status, tel, hello, track, land, preview }) {
     <section class="panel" aria-label="Sky">
       <div class="head"><h2>Sky</h2></div>
       <canvas ref=${skyRef} role="img" aria-label="Sky dome: pass path, mount, target, horizon mask"></canvas>
-      <span class="small">North up, east left · selected pass: solid where sunlit, dotted in shadow · dashed: tracking plan · ring: mount</span>
+      <span class="small">North up, east left · selected pass: solid where sunlit, dotted in shadow${conj ? ' · thin: the other object · ✕: closest approach' : ''} · dashed: tracking plan · ring: mount</span>
     </section></div>`;
 }
 
+function ConjDetail({ preview, clearPreview }) {
+  const c = preview.conj, p = preview.row, ch = p.chosen || {};
+  const row = (k, v) => html`<tr><th>${k}</th><td>${v}</td></tr>`;
+  const magTxt = (m, est) => (m == null ? 'unknown' : `${est ? '≈' : ''}${Number(m).toFixed(1)}`);
+  const prob = Number(c.max_prob);
+  return html`<section class="panel" aria-label="Conjunction details">
+    <div class="head"><h2>Conjunction</h2>
+      <button class="btn" style="min-height:26px;margin-left:auto" onClick=${clearPreview}>Clear</button></div>
+    <table class="kv mono"><tbody>
+      ${row('Objects', html`${conjName(c.name1)} (${c.cat1})<br />${conjName(c.name2)} (${c.cat2})`)}
+      ${row('TCA', `${utc(c.tca_ns)} UTC · el ${Number(c.el_deg).toFixed(1)}° az ${Number(c.az_deg).toFixed(1)}°`)}
+      ${row('Miss', `${c.range_km < 1 ? Math.round(c.range_km * 1000) + ' m' : Number(c.range_km).toFixed(2) + ' km'} at ${Number(c.speed_km_s).toFixed(2)} km/s`)}
+      ${row('From here', `${Math.round(c.obs_range_km)} km away; ${preview.min_sep_arcsec != null
+        ? `${fmtAng(preview.min_sep_arcsec)} apart at ${utc(preview.min_sep_ns)}` : `at most ${fmtAng(c.sep_max_arcsec)} apart (no elements for the other object)`}`)}
+      ${row('Lighting', `${c.sunlit ? 'sunlit' : 'in shadow'} · Sun ${Number(c.sun_el_deg).toFixed(0)}° at the site`)}
+      ${row('Brightness', `${magTxt(c.mag1, c.mag_estimated1)} / ${magTxt(c.mag2, c.mag_estimated2)}`)}
+      ${row('Max prob', `${prob >= 0.001 ? prob.toFixed(4) : prob.toExponential(1)} · dilution ${Number(c.dilution_km).toFixed(2)} km`)}
+      ${row('Elements', `${Number(c.dse1).toFixed(1)} / ${Number(c.dse2).toFixed(1)} days old at TCA`)}
+      ${row('Track', `${p.name}, pass ${utc(p.rise_ns)}–${utc(p.set_ns)} · ${p.planned === false ? 'planning…' : ch.mode || 'no plan fits'}`)}
+    </tbody></table>
+    ${!ch.mode && p.planned !== false && html`<ul class="small problems">${(p.plans || []).map((x) => html`<li><b>${x.mode}</b>: ${(x.problems || []).join('; ')}</li>`)}</ul>`}
+    <p class="small">The tracked object uses its latest element set, the other SOCRATES's; predictions get worse as elements age.
+      <b>Track</b> follows ${p.name} through the pass; the other object crosses the field near TCA.</p>
+  </section>`;
+}
+
 function PassDetail({ preview, status, clearPreview }) {
+  if (preview?.kind === 'conj') return html`<${ConjDetail} preview=${preview} clearPreview=${clearPreview} />`;
   if (!preview) {
     return html`<section class="panel" aria-label="Pass details"><div class="head"><h2>Pass</h2></div>
       <p class="small">Click a pass in the table to preview it here: path across the sky, ground track, and whether the satellite is sunlit. ${status?.target_name ? html`<br /><br />Current target: <b>${status.target_name}</b>.` : ''}</p></section>`;
@@ -604,6 +734,19 @@ function App() {
     if (previewReq.current !== passKey(p)) return; // a newer click won
     setPreviewState(r.ok ? { key: passKey(p), ...r.data, row: p } : null);
   }, [send]);
+  // A conjunction preview: both objects' paths through the tracked object's pass. Returns the
+  // preview (Track uses its pass), or null.
+  const setConjPreview = useCallback(async (c) => {
+    previewReq.current = c ? conjKey(c) : null;
+    if (!c) { setPreviewState(null); return null; }
+    const r = await send('conjunction_detail', { cat1: c.cat1, cat2: c.cat2, primary: c.primary, tca_ns: c.tca_ns });
+    if (previewReq.current !== conjKey(c)) return null;
+    const pv = r.ok ? { key: conjKey(c), kind: 'conj', conj: c, ...r.data, row: r.data.pass } : null;
+    setPreviewState(pv);
+    return pv;
+  }, [send]);
+  const [listTab, setListTabState] = useState(loadPref('listtab', 'passes'));
+  const setListTab = (t) => { setListTabState(t); savePref('listtab', t); setPreviewState(null); previewReq.current = null; };
   const updatePreviewRow = useCallback((row) => setPreviewState((pv) => (pv && pv.key === passKey(row) ? { ...pv, row } : pv)), []);
   const openDialog = () => dialogRef.current?.showModal();
 
@@ -617,8 +760,12 @@ function App() {
     <div class="passes-screen" hidden=${screen !== 'passes'}>
       <${PassViews} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} preview=${preview} />
       <div class="pv-lower">
-        <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview}
-          updatePreviewRow=${updatePreviewRow} setScreen=${setScreen} />
+        <div class="pv-lists">
+          <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview}
+            updatePreviewRow=${updatePreviewRow} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} />
+          <${Conjunctions} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview}
+            setConjPreview=${setConjPreview} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} />
+        </div>
         <${PassDetail} preview=${preview} status=${status} clearPreview=${() => setPreview(null)} />
       </div>
     </div>

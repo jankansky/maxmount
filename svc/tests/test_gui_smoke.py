@@ -173,8 +173,8 @@ def test_pass_preview(gui_url, monkeypatch):
         rows.nth(1).get_by_role("button", name="Track").click()
         page.wait_for_function("() => document.querySelector('.statusline').textContent.includes('target: refused')", timeout=15000)
         assert page.locator("[aria-label='Pass details'] table.kv").is_visible()
-        if page.locator(".clockwarn").count():
-            page.locator(".clockwarn").get_by_label("Track anyway").check()
+        if page.locator("[aria-label=Passes] .clockwarn").count():
+            page.locator("[aria-label=Passes] .clockwarn").get_by_label("Track anyway").check()
         rows.nth(1).click()  # again: clears
         page.wait_for_selector("[aria-label='Pass details'] table.kv", state="detached", timeout=5000)
         # Changing a selector searches again by itself; 'all in group' hides the watch list.
@@ -205,5 +205,61 @@ def test_pass_preview(gui_url, monkeypatch):
         page.locator("nav").get_by_role("button", name="Track").click()
         assert page.evaluate("() => location.hash") == ""
         assert not page.locator("[aria-label=Passes]").is_visible()
+        browser.close()
+    assert not errors, errors
+
+
+def test_conjunctions_tab(gui_url, monkeypatch, served):  # noqa: F811
+    """The Conjunctions tab lists SOCRATES events visible from the site and previews one with
+    both objects' paths. Data are injected (2008 ISS elements), so no network is needed."""
+    from maxmount_svc import socrates
+
+    from .conftest import ISS
+    from .test_socrates import PAIR_OMM, iss_conjunctions
+
+    _client, settings = served
+    text, p = iss_conjunctions(settings.site, settings.tracking.horizon_min_el_deg)
+    orig_conj = Gateway._conjunctions
+
+    def conjunctions(self, args):
+        self.socrates = getattr(self, "_test_soc", None) or socrates.Socrates.from_text(text)
+        self._test_soc = self.socrates
+        self.socrates.pair = lambda a, b: socrates.omm_to_tles(PAIR_OMM)
+        if not getattr(self, "_test_tles", False):
+            real = self.tles.group
+            self.tles.group = lambda g: ({"ISS (ZARYA)": ISS}, "test") if g == "active" else real(g)
+            self._test_tles = True
+        return orig_conj(self, {**args, "start_ns": str(p.rise_ns - 3600 * 10**9), "hours": 3})
+
+    monkeypatch.setattr(Gateway, "_conjunctions", conjunctions)
+    errors = []
+    with playwright.sync_playwright() as pw:
+        try:
+            browser = pw.chromium.launch()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no Chromium for Playwright: {e}")
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.goto(gui_url + "#passes")
+        page.get_by_role("tab", name="Conjunctions (SOCRATES)").first.click()
+        conj = page.locator("[aria-label=Conjunctions]")
+        rows = conj.locator("tbody tr:not(.empty)")
+        conj.get_by_label("Lighting").select_option("any")
+        conj.get_by_label("co-orbiting pairs").check()
+        rows.first.wait_for(timeout=30000)
+        assert "ISS (ZARYA)" in rows.first.text_content() and "TEST DEBRIS" in rows.first.text_content()
+        rows.first.click()
+        detail = page.locator("[aria-label='Conjunction details']")
+        detail.wait_for(timeout=30000)
+        assert "(99001)" in detail.text_content() and "apart at" in detail.text_content()
+        page.get_by_text("✕: closest approach").wait_for(timeout=5000)
+        # Track is refused here (old pass, poor test clock) but must not break anything.
+        rows.first.get_by_role("button", name="Track").click()
+        page.wait_for_function("() => document.querySelector('.statusline').textContent.includes('target')", timeout=30000)
+        detail.get_by_role("button", name="Clear").click()
+        page.wait_for_selector("[aria-label='Conjunction details']", state="detached", timeout=5000)
+        page.get_by_role("tab", name="Upcoming passes").first.click()
+        assert page.locator("[aria-label=Passes]").is_visible() and not conj.is_visible()
         browser.close()
     assert not errors, errors

@@ -170,3 +170,5 @@ table.kv td { padding: 3px 0; }
 .problems { margin: 8px 0 0; padding-left: 18px; }
 .gotrack { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
   border: 1px solid var(--ok); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+label.check { display: flex; gap: 6px; align-items: center; }
+label.check input { min-height: 0; }

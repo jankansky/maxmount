@@ -17,6 +17,8 @@ WebSocket messages (JSON):
       op: target (TargetCommand as JSON), stop, hold, park, tle_names,
           passes {group, names | all, hours, min_max_el_deg}, pass_plan {name, line1, line2, rise_ns, set_ns},
           pass_preview {name, line1, line2, rise_ns, culmination_ns, set_ns} (ground track + sky path),
+          conjunctions {hours, max_range_km, lighting, max_mag, coorbiting} (SOCRATES, visible from the site),
+          conjunction_detail {cat1, cat2, primary, tca_ns} (both paths, separation, the pass to track),
           enable/disable {axis} and fault_reset (straight to mount-rt),
           jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
 """
@@ -36,7 +38,7 @@ import numpy as np
 from aiohttp import WSMsgType, web
 from google.protobuf import json_format
 
-from . import astro, kinematics, planner, satcat
+from . import astro, kinematics, planner, satcat, socrates
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .proto import mpb
@@ -52,6 +54,7 @@ TLE_GROUPS = ("stations", "visual", "active", "starlink", "weather", "science")
 TLE_MAX_AGE_S = 6 * 3600
 ALL_MAX = 400          # largest group searched with "all objects"
 PASS_ROWS_MAX = 300    # passes returned to the GUI
+COORBIT_KM_S = 0.1     # conjunctions slower than this are formation flyers or co-located
 
 
 def _msg_to_dict(m) -> dict:
@@ -155,6 +158,7 @@ class Gateway:
         self.park = (park_az_deg, park_el_deg)
         self.tles = TleCache()
         self.satcat = satcat.SatCatalog()
+        self.socrates = socrates.Socrates()
         self.clients: set[web.WebSocketResponse] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.client: MountClient | None = None
@@ -432,6 +436,10 @@ class Gateway:
             return True, f"{len(sats)} objects ({note})", {"names": sorted(sats)}
         if op == "passes":
             return self._passes(args)
+        if op == "conjunctions":
+            return self._conjunctions(args)
+        if op == "conjunction_detail":
+            return self._conjunction_detail(args)
         if op == "pass_plan":
             return self._pass_plan(args)
         if op == "pass_preview":
@@ -579,6 +587,121 @@ class Gateway:
             k = int(np.argmin(mag))
             row["peak_mag"], row["peak_mag_ns"] = round(float(mag[k]), 1), str(int(t[k]))
         return True
+
+    # -- SOCRATES conjunctions ------------------------------------------------------------------
+    def _active_tles(self) -> dict[str, tuple[str, str, str]]:
+        sats, _note = self.tles.group("active")
+        return {satcat.norad_key(l1[2:7]): (name, l1, l2) for name, (l1, l2) in sats.items()}
+
+    def _mag_at(self, cat: str, range_km: float, phase_rad: float, el_deg: float):
+        info = self.satcat.get(cat)
+        if info is None or info.std_mag is None:
+            return None, False
+        m = satcat.predicted_mag(info.std_mag, range_km, phase_rad, math.radians(el_deg))
+        return round(float(m), 1), info.mag_estimated
+
+    def _conjunctions(self, args: dict):
+        """SOCRATES conjunctions in the next `hours` within `max_range_km`, with the event above
+        the horizon mask at the site. lighting: any | sunlit | dark_sky (as for passes, at TCA).
+        max_mag: keep events where either object is predicted at least this bright. Pairs moving
+        slower than COORBIT_KM_S relative to each other (formation flyers, docked or co-located
+        satellites) are left out unless coorbiting is true."""
+        if self.settings.site is None:
+            return False, "no site location", None
+        hours = float(args.get("hours", 48))
+        max_range = float(args.get("max_range_km", 1))
+        lighting = args.get("lighting", "any")
+        if lighting not in ("any", "sunlit", "dark_sky"):
+            return False, f"unknown lighting filter '{lighting}'", None
+        conj = self.socrates.load()
+        self.satcat.load()
+        now = int(args.get("start_ns") or 0) or time.time_ns()
+        rows = socrates.screen(conj, self._active_tles(), self.settings.site, now, now + int(hours * 3600 * NS), max_range,
+                               self.settings.tracking.horizon_min_el_deg)
+        n_vis = len(rows)
+        if not args.get("coorbiting"):
+            rows = [r for r in rows if r["speed_km_s"] >= COORBIT_KM_S]
+        n_co = n_vis - len(rows)
+        if lighting != "any":
+            rows = [r for r in rows if r["sunlit"] and (lighting == "sunlit" or r["sun_el_deg"] < -6)]
+        for r in rows:
+            phase = r.pop("phase_rad")
+            for k in ("1", "2"):
+                m, est = self._mag_at(r["cat" + k], r["obs_range_km"], phase, r["el_deg"]) if r["sunlit"] else (None, False)
+                r["mag" + k], r["mag_estimated" + k] = m, est
+            known = [m for m in (r["mag1"], r["mag2"]) if m is not None]
+            r["mag"] = min(known) if known else None
+            # Seen from the site the two are at most range / observer range apart at TCA.
+            r["sep_max_arcsec"] = round(r["range_km"] / r["obs_range_km"] * 206264.8, 1)
+        max_mag = args.get("max_mag")
+        if max_mag not in (None, "", "any"):
+            rows = [r for r in rows if r["mag"] is not None and r["mag"] <= float(max_mag)]
+        rows.sort(key=lambda r: int(r["tca_ns"]))
+        shown = rows[:PASS_ROWS_MAX]
+        msg = f"{len(rows)} conjunctions within {max_range:g} km in {hours:g} h visible from the site"
+        if n_co and not args.get("coorbiting"):
+            msg += f" ({n_co} co-orbiting pairs hidden)"
+        if len(rows) > len(shown):
+            msg += f"; showing the first {len(shown)}"
+        msg += f"; {self.socrates.note}; {self.satcat.note}"
+        return True, msg, {"conjunctions": shown}
+
+    def _conjunction_detail(self, args: dict):
+        """Both objects' sky paths through the primary's pass, the closest approach as seen from
+        the site, and the pass to track (the primary: the object with an element set)."""
+        site = self.settings.site
+        cat1, cat2, prim = str(args["cat1"]), str(args["cat2"]), str(args["primary"])
+        tca = int(args["tca_ns"])
+        try:
+            pair = self.socrates.pair(cat1, cat2)
+        except OSError as e:
+            pair = {}
+            log.warning("SOCRATES data.php: %s", e)
+        active = self._active_tles()
+        sec = cat2 if prim == cat1 else cat1
+        p_tle = active.get(prim) or pair.get(prim)
+        s_tle = pair.get(sec) or active.get(sec)
+        if p_tle is None:
+            return False, f"no element set for {prim}", None
+        mask = self.settings.tracking.horizon_min_el_deg * DEG
+        sat = SatelliteTarget(site, p_tle[1], p_tle[2], name=p_tle[0])
+        found = planner.find_passes(sat, tca - 40 * 60 * NS, tca + 40 * 60 * NS, mask)
+        p = next((q for q in found if q.rise_ns <= tca <= q.set_ns), None)
+        if p is None:
+            return False, f"{p_tle[0]} is below the horizon mask at TCA with the current elements", None
+        row = {"name": p_tle[0], "line1": p_tle[1], "line2": p_tle[2], "planned": False, "chosen": {}, "plans": [],
+               "rise_ns": str(p.rise_ns), "culmination_ns": str(p.culmination_ns), "set_ns": str(p.set_ns),
+               "max_el_deg": math.degrees(p.max_el), "culmination_az_deg": math.degrees(p.culmination_az)}
+        self._add_lighting(row)
+        ok, _m, prev = self._pass_preview(row)
+        if not ok:
+            return False, _m, None
+        az, el = sat.observed(np.int64(tca))
+        lon, lat, _alt = self._subsat(sat, np.array([tca], dtype=np.int64))
+        prev["ground"]["mark"] = [round(float(lon[0]), 2), round(float(lat[0]), 2)]
+        out = {"pass": row, **prev, "tca_azel": [round(math.degrees(az), 2), round(math.degrees(el), 2)],
+               "secondary": {"cat": sec, "name": s_tle[0] if s_tle else "", "has_elements": s_tle is not None},
+               "sky2": None, "min_sep_arcsec": None, "min_sep_ns": None}
+        if s_tle is not None:
+            sat2 = SatelliteTarget(site, s_tle[1], s_tle[2], name=s_tle[0])
+            ts = np.unique(np.concatenate([np.arange(p.rise_ns, p.set_ns, 5 * NS, dtype=np.int64), [p.set_ns]]))
+            az2, el2 = sat2.observed(ts)
+            lit2 = sat2.sunlit(ts)
+            out["sky2"] = [[round(math.degrees(a), 2), round(math.degrees(e), 2), int(bool(s_))] for a, e, s_ in zip(az2, el2, lit2)]
+            # Smallest angle between the two as seen from the site, within 2 min of TCA.
+            tt = np.arange(tca - 120 * NS, tca + 120 * NS, NS // 10, dtype=np.int64)
+            u1 = sat.geometric_enu_km(tt)
+            u2 = sat2.geometric_enu_km(tt)
+            u1 /= np.linalg.norm(u1, axis=-1, keepdims=True)
+            u2 /= np.linalg.norm(u2, axis=-1, keepdims=True)
+            sep = np.degrees(np.arccos(np.clip(np.sum(u1 * u2, axis=-1), -1, 1))) * 3600
+            k = int(np.argmin(sep))
+            out["min_sep_arcsec"], out["min_sep_ns"] = round(float(sep[k]), 1), str(int(tt[k]))
+        plan_ok, _pm, plan = self._pass_plan(row)
+        if plan_ok:
+            row.update({k: plan["pass"][k] for k in ("chosen", "plans", "planned") if k in plan["pass"]})
+        sep_txt = f", {out['min_sep_arcsec']:.0f}\" apart at best" if out["min_sep_arcsec"] is not None else ""
+        return True, f"{p_tle[0]} × {out['secondary']['name'] or sec}{sep_txt}", out
 
     def _svc_passes(self, name: str, tle: tuple[str, str], start_ns: int, hours: float):
         req = mpb.PassesRequest(tle=mpb.Tle(name=name, line1=tle[0], line2=tle[1]), hours=hours, start_ns=start_ns)

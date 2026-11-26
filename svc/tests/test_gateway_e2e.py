@@ -337,3 +337,57 @@ def test_watch_terms_match_names_and_catalog_numbers():
     many = {f"STARLINK-{i}": (l1.format(i), "") for i in range(WATCH_MAX + 1)}
     names, notes = _match_names(many, ["starlink"])
     assert names == [] and notes["capped"] == "starlink" and notes["count"] == WATCH_MAX + 1
+
+
+def test_conjunctions_and_detail(stack):
+    """SOCRATES conjunctions visible from the site, then one in detail: both paths, the closest
+    approach as seen from the site, and the pass to track (no network: data injected)."""
+    from maxmount_svc import socrates
+
+    from .conftest import ISS
+    from .test_socrates import PAIR_OMM, iss_conjunctions
+
+    settings = stack
+    text, p = iss_conjunctions(settings.site, settings.tracking.horizon_min_el_deg)
+    port = 18000 + __import__("random").randint(8001, 9900)
+
+    async def run():
+        gw = await _session(settings, port)
+        gw.socrates = socrates.Socrates.from_text(text)
+        gw.socrates.pair = lambda a, b: socrates.omm_to_tles(PAIR_OMM)
+        gw.tles.group = lambda g: ({"ISS (ZARYA)": ISS}, "test")
+        try:
+            async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                async def req(i, op, args):
+                    await ws.send_str(json.dumps({"type": "request", "id": i, "op": op, "args": args}))
+                    return await _recv_until(ws, lambda m: m["type"] == "reply" and m["id"] == i, timeout=90)
+
+                base = {"hours": 3, "max_range_km": 5, "start_ns": str(p.rise_ns - 3600 * 10**9), "coorbiting": True}
+                r = await req(1, "conjunctions", base)
+                assert r["ok"], r
+                rows = r["data"]["conjunctions"]
+                assert len(rows) == 2 and rows[0]["name1"] == "ISS (ZARYA) [+]"
+                c = rows[0]
+                assert c["mag1"] is None or -5 < c["mag1"] < 5  # ISS std mag -2.5 when sunlit
+                assert c["sep_max_arcsec"] == pytest.approx(c["range_km"] / c["obs_range_km"] * 206264.8, abs=0.2)
+                # The first pair moves at 0.05 km/s: hidden as co-orbiting by default.
+                r = await req(2, "conjunctions", {**base, "coorbiting": False})
+                assert len(r["data"]["conjunctions"]) == 1 and "co-orbiting" in r["message"]
+                r = await req(3, "conjunctions", {**base, "max_range_km": 1})
+                assert len(r["data"]["conjunctions"]) == 1
+
+                r = await req(4, "conjunction_detail", {k: c[k] for k in ("cat1", "cat2", "primary", "tca_ns")})
+                assert r["ok"], r
+                d = r["data"]
+                assert d["pass"]["name"] == "ISS (ZARYA)" and int(d["pass"]["rise_ns"]) <= int(c["tca_ns"]) <= int(d["pass"]["set_ns"])
+                assert d["secondary"] == {"cat": "99001", "name": "TEST DEBRIS", "has_elements": True}
+                assert len(d["sky"]) > 10 and len(d["sky2"]) == len(d["sky"])
+                assert d["tca_azel"][1] == pytest.approx(c["el_deg"], abs=0.3)
+                assert len(d["ground"]["mark"]) == 2
+                # 600 m apart along the orbit, a few hundred km away: well under a degree apart.
+                assert 0 < d["min_sep_arcsec"] < 1000
+                assert d["pass"]["planned"] is True or "plans" in d["pass"]
+        finally:
+            await gw.stop()
+
+    asyncio.run(run())
