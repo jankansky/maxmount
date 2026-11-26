@@ -116,7 +116,19 @@ RGGB Bayer mosaic, RAW16 as 16-bit little-endian (the 12-bit data shifted up by 
 RGB. Frames wait in a RAM buffer (`cameras.zwo.record_buffer_mb`, allocated when recording
 starts) for the disk; when it is full, frames are dropped and counted rather than slowing the
 camera. Recording stops when free space falls below `cameras.zwo.record_min_free_mb`.
-`maxmount_svc.ser.read_ser()` reads the files back in Python.
+`maxmount_svc.ser.read_ser()` reads the files back in Python. A `.csv` next to each SER logs
+every frame's ROI position and, when ROI tracking, where the target was.
+
+**ROI tracking** (the roi_track command; GUI: Track ROI). The ROI follows the target across
+the sensor: each frame is searched for the target (the brightest extended object, or the one
+nearest a picked point, then only near where it is expected), an alpha-beta filter estimates
+its position and speed, and the ROI's start position is moved (its size stays, so recording
+continues) to keep the target centred. A ZWO camera keeps delivering a few frames read at the
+old position after a move; `cameras.zwo.roi_latency_frames` (default 2, to be measured on the
+real camera) says how many, so each frame is measured and logged with the position it was
+really read at. Each measurement is published on `camera/zwo/centroid` with the target's
+offset from the sensor centre, for the future mount closed loop. The simulator's target drifts
+up to ~350 px from the centre, so without tracking it leaves a small ROI.
 
 Disk speed limits long recordings. The Pi's SD card sustains about 34 MB/s
 (`dd ... conv=fdatasync`, 2026-11-26), about 110 fps of 640 × 480 RAW8 or 26 fps full frame.

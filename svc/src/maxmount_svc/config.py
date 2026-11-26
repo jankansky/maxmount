@@ -74,6 +74,7 @@ class ZwoSettings:
     liveview_fps: float = 8.0         # preview frames to the GUI (the camera streams faster)
     record_buffer_mb: float = 512.0   # SER recording: frames queued in RAM while the card catches up
     record_min_free_mb: float = 2048.0  # SER recording stops when the disk has less free space than this
+    roi_latency_frames: float = 2.0   # ROI tracking: frames still read at the old position after a move
 
 
 @dataclass
@@ -303,7 +304,7 @@ def load_system(path: str | Path) -> SystemSettings:
         imaging=_imaging(doc),
         dslr=DslrSettings(**{k: (float(v) if k == "liveview_fps" else str(v))
                              for k, v in ((doc.get("cameras") or {}).get("dslr") or {}).items() if k in DslrSettings.__dataclass_fields__}),
-        zwo=ZwoSettings(**{k: (float(v) if k in ("liveview_fps", "record_buffer_mb", "record_min_free_mb") else str(v))
+        zwo=ZwoSettings(**{k: (float(v) if k in ("liveview_fps", "record_buffer_mb", "record_min_free_mb", "roi_latency_frames") else str(v))
                            for k, v in ((doc.get("cameras") or {}).get("zwo") or {}).items() if k in ZwoSettings.__dataclass_fields__}),
         adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
                              for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),

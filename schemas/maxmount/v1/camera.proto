@@ -4,6 +4,7 @@
 //   camera/<id>/status   CameraStatus, about once a second and on every change
 //   camera/<id>/frame    CameraFrame: live view frames, and the preview of each capture
 //   camera/<id>/cmd      queryable: CameraCommand -> CameraReply
+//   camera/<id>/centroid CameraCentroid: the tracked target in each frame (ROI tracking on)
 syntax = "proto3";
 
 package maxmount.v1;
@@ -63,6 +64,17 @@ message CameraStatus {
   int64 record_max_frames = 35; // 0: no frame limit
   bool records_video = 36;      // the camera can record video
   bool record_stopping = 37;    // stopped; still writing the frames queued in RAM
+  // ROI tracking (zwo): the ROI follows the target across the sensor.
+  bool roi_tracking = 38;
+  string track_state = 39;      // off | acquiring | locked | lost
+  double track_x = 40;          // the target in the ROI, binned px (NaN if not found)
+  double track_y = 41;
+  double track_err_x = 42;      // from the ROI centre, binned px
+  double track_err_y = 43;
+  double track_snr = 44;
+  double track_speed = 45;      // across the sensor, binned px/s
+  int64 roi_moves = 46;
+  bool roi_centered = 47;       // the ROI is at the sensor's centre (not moved by tracking)
 }
 
 message SetCameraSetting {
@@ -81,6 +93,17 @@ message Record {
   int32 max_frames = 3;         // 0: no limit
 }
 
+// ROI tracking: on acquires the brightest object in the ROI, or the one nearest (pick_x,
+// pick_y) when has_pick (fractions of the ROI's width and height from its top-left);
+// recenter moves the ROI back to the sensor's centre.
+message RoiTrack {
+  bool on = 1;
+  bool has_pick = 2;
+  double pick_x = 3;
+  double pick_y = 4;
+  bool recenter = 5;
+}
+
 message CameraCommand {
   oneof command {
     SetCameraSetting set = 1;
@@ -90,6 +113,7 @@ message CameraCommand {
     bool stretch = 5;
     bool abort = 6;             // end a bulb exposure early
     Record record = 7;
+    RoiTrack roi_track = 8;
   }
 }
 
@@ -118,4 +142,30 @@ message CameraFrame {
   string shutter = 15;
   double gain = 16;             // zwo
   int32 bit_depth = 17;         // of the saved data
+  // Live view of a video camera: the ROI this frame was read with (x, y, w, h, binned
+  // sensor px) and the tracked target in it (frame px; NaN if none).
+  repeated int32 roi = 18;
+  string track_state = 19;
+  double track_x = 20;
+  double track_y = 21;
+}
+
+// The tracked target in one frame. Positions in binned sensor pixels from the sensor's
+// top-left (x right, y down, 0 = the centre of the first pixel); dx, dy from the sensor's
+// centre (the camera's boresight, for pointing corrections).
+message CameraCentroid {
+  int64 t_ns = 1;               // mid-exposure, UTC (approximate: frame arrival minus half the exposure)
+  string camera_id = 2;
+  string state = 3;             // locked | acquiring
+  double x = 4;
+  double y = 5;
+  double dx = 6;
+  double dy = 7;
+  repeated int32 roi = 8;       // x, y, w, h
+  int32 bin = 9;
+  double flux = 10;
+  double snr = 11;
+  double vx = 12;               // filtered velocity, binned px/s
+  double vy = 13;
+  double pixel_um = 14;         // binned pixel size
 }

@@ -6,6 +6,12 @@ and USB bandwidth; single frames saved as FITS on the Pi; video recorded as SER 
 (for lucky imaging: AutoStakkert!, PIPP, Siril). Live view previews are debayered (2x2
 superpixel) and stretched by the camera service.
 
+ROI tracking (roitrack.py) runs in the video thread: it finds the target in each frame and
+moves the ROI's start position on the sensor (the size stays, so a recording continues) to
+keep it centred. A move reaches the frames latency_frames later (frames already in the
+camera's pipeline keep the old position); the origin history accounts for that, so each
+frame is measured, logged and saved with the ROI position it was read with.
+
 Backends:
   ZwoSdkBackend  a real camera through ZWO's ASI SDK (libASICamera2, a binary library from
                  ZWO's developer page, loaded with the MIT-licensed `zwoasi` package:
@@ -32,6 +38,7 @@ from pathlib import Path
 import numpy as np
 
 from .camera import CameraError, Shot
+from .roitrack import RoiTracker
 from .ser import SerWriter
 
 NS = 1_000_000_000
@@ -107,6 +114,10 @@ class Recorder:
         local_offset = -time.altzone if time.localtime().tm_isdst > 0 else -time.timezone
         self.writer = SerWriter(self.path, shape[1], shape[0], color, bit_depth, instrument=instrument,
                                 utc_offset_s=local_offset)
+        # Per-frame log: where the ROI was and where the target was found (sensor pixels, binned).
+        self.csv_path = self.path.with_suffix(".csv")
+        self._csv = open(self.csv_path, "w")
+        self._csv.write("frame,t_utc_ns,roi_x,roi_y,bin,target_x,target_y,snr,track\n")
         frame_bytes = int(np.prod(self.shape)) * self.dtype.itemsize
         n = int(min(max(pool_bytes // max(frame_bytes, 1), 4), 4096))
         self._free: queue.Queue = queue.Queue()
@@ -140,8 +151,9 @@ class Recorder:
     def queued(self) -> int:
         return self._full.qsize()
 
-    def offer(self, frame: np.ndarray, t_ns: int) -> None:
-        """One video frame and its UTC time (ns). Never blocks."""
+    def offer(self, frame: np.ndarray, t_ns: int, meta: tuple = ()) -> None:
+        """One video frame, its UTC time (ns), and (roi_x, roi_y, bin, target_x, target_y, snr,
+        track state) for the log. Never blocks."""
         with self._lock:
             if self.stopping:
                 return
@@ -157,7 +169,7 @@ class Recorder:
                 self.dropped += 1  # the card is behind and the pool is used up
                 return
             np.copyto(buf, frame, casting="unsafe")
-            self._full.put((buf, t_ns))
+            self._full.put((buf, t_ns, meta))
             self.accepted += 1
             if self.max_frames and self.accepted >= self.max_frames:
                 self._stop_locked(f"{self.max_frames} frames recorded")
@@ -187,9 +199,10 @@ class Recorder:
                 if item is None:
                     break
                 if item is not False:
-                    buf, t_ns = item
+                    buf, t_ns, meta = item
                     self.writer.write(buf, t_ns)
                     self._free.put(buf)
+                    self._csv.write(_csv_row(self.writer.frames - 1, t_ns, meta))
                 now = time.monotonic()
                 if now - last_check >= 1.0:
                     last_check = now
@@ -203,6 +216,7 @@ class Recorder:
                 self._stop_locked(f"write error: {e}", error=True)
         finally:
             try:
+                self._csv.close()
                 self.writer.close()
             except OSError as e:
                 self.reason, self.error = f"{self.reason}; closing: {e}", True
@@ -223,6 +237,14 @@ class Recorder:
                 "record_queued": self.queued, "record_pool": self.pool_frames, "disk_free_bytes": self.free_bytes,
                 "record_max_s": self.max_s, "record_max_frames": self.max_frames,
                 "record_stopping": self.stopping and not self.done.is_set()}
+
+
+def _csv_row(i: int, t_ns: int, meta: tuple) -> str:
+    def f(v):
+        if v is None or (isinstance(v, float) and not math.isfinite(v)):
+            return ""
+        return f"{v:.2f}" if isinstance(v, float) else str(v)
+    return ",".join([str(i), str(t_ns), *(f(v) for v in meta)]) + "\n"
 
 
 # -- shared base: settings, ROI, video thread ------------------------------------------------
@@ -253,6 +275,17 @@ class _ZwoBase:
         self._dropped = 0
         self._temperature = float("nan")
         self._rec: Recorder | None = None       # the recording in progress (or the last one)
+        # ROI position and tracking.
+        self._center: tuple[float, float] | None = None  # ROI centre, unbinned sensor px; None: sensor centre
+        self.roi_latency_frames = 2              # frames read with the old position after a move
+        self.tracker = RoiTracker(self.roi_latency_frames)
+        self._track_cmd = None                   # (on, pick, recenter) for the video thread
+        self._origin_hist: list[tuple[int, int, int]] = [(0, 0, 0)]  # (first frame number, x, y)
+        self._grabbed = 0                        # frames grabbed since video started
+        self._latest_info: dict = {}
+        self._copied_info: dict = {}
+        self.preview_info: dict = {}             # the ROI and target of the latest preview
+        self.on_measure = None                   # called with each tracking measurement (dict)
 
     # ROI in binned pixels, centred, with the SDK's alignment (width % 8, height % 2, even origin).
     def roi(self) -> tuple[int, int, int, int]:
@@ -262,8 +295,19 @@ class _ZwoBase:
             return 0, 0, fw, fh
         w, h = (int(x) for x in self.v["roi"].split("x"))
         w, h = min(w, fw) // 8 * 8, min(h, fh) // 2 * 2
-        x, y = (fw - w) // 2 // 2 * 2, (fh - h) // 2 // 2 * 2
+        if self._center is None:
+            x, y = (fw - w) // 2 // 2 * 2, (fh - h) // 2 // 2 * 2
+        else:  # even origin (keeps the Bayer phase), inside the sensor
+            x = int(round((self._center[0] / b - (w - 1) / 2) / 2)) * 2
+            y = int(round((self._center[1] / b - (h - 1) / 2) / 2)) * 2
+            x, y = min(max(x, 0), (fw - w) // 2 * 2), min(max(y, 0), (fh - h) // 2 * 2)
         return x, y, w, h
+
+    def roi_center(self) -> tuple[float, float]:
+        """The ROI's centre in unbinned sensor pixels."""
+        x, y, w, h = self.roi()
+        b = int(self.v["bin"])
+        return (x + (w - 1) / 2) * b, (y + (h - 1) / 2) * b
 
     def settings(self) -> list[dict]:
         def num(name, label, unit):
@@ -305,6 +349,8 @@ class _ZwoBase:
             self._stop_video()
         self.v[name] = new
         self._apply(name)
+        if geometry:
+            self.tracker.reacquire()
         if was and geometry:
             self._start_video()
 
@@ -323,7 +369,52 @@ class _ZwoBase:
                "roi": [x, y, w, h], "sensor_width": self.sensor[0], "sensor_height": self.sensor[1]}
         if self._rec is not None:
             out.update(self._rec.status())
+        out.update(self.tracker.status((x, y), (w, h), int(self.v["bin"])))
+        out["roi_centered"] = self._center is None
         return out
+
+    # -- ROI tracking -----------------------------------------------------------------------
+    def set_roi_track(self, on: bool, pick: tuple[float, float] | None = None, recenter: bool = False) -> None:
+        """Start (acquiring the brightest object, or the one nearest pick: fractions of the
+        ROI's width and height) or stop ROI tracking; recenter: move the ROI back to the
+        sensor's centre. Applied by the video thread when video runs."""
+        if pick is not None:
+            x, y, w, h = self.roi()
+            b = int(self.v["bin"])
+            pick = ((x + pick[0] * w) * b, (y + pick[1] * h) * b)
+        if self._video:
+            self._track_cmd = (on, pick, recenter)
+        else:
+            self._do_track_cmd(on, pick, recenter, self._grabbed)
+
+    def _do_track_cmd(self, on, pick, recenter, k) -> None:
+        if on:
+            self.tracker.start(pick)
+        else:
+            self.tracker.stop()
+        if recenter:
+            self._move_roi(None, k)
+
+    def _move_roi(self, center, k: int) -> None:
+        """Put the ROI centre at center (sensor px; None: the sensor's centre). Frame k is the
+        last one read before the move."""
+        old = self.roi()
+        self._center = center
+        x, y, w, h = self.roi()
+        if (x, y) == old[:2]:
+            return
+        if self._video:
+            self._set_start_pos(x, y)
+            self._origin_hist.append((k + 1 + self.roi_latency_frames, x, y))
+            del self._origin_hist[:-8]
+        else:
+            self._apply("roi")
+
+    def _origin_at(self, k: int) -> tuple[int, int]:
+        for first, x, y in reversed(self._origin_hist):
+            if k >= first:
+                return x, y
+        return self._origin_hist[0][1:]
 
     # -- SER recording ----------------------------------------------------------------------
     @property
@@ -378,6 +469,8 @@ class _ZwoBase:
         with self._lock:
             self._latest = None  # a frame from before (another ROI or format) must not be shown
             self._seq, self._fps = 0, 0.0
+        x, y, _w, _h = self.roi()
+        self._origin_hist, self._grabbed = [(0, x, y)], 0
         self._begin_video()
         self._video = True
         self._thread = threading.Thread(target=self._video_loop, daemon=True, name="zwo-video")
@@ -394,34 +487,73 @@ class _ZwoBase:
     def _video_loop(self) -> None:
         t_last, n = time.monotonic(), 0
         while not self._stop.is_set():
+            self._grabbed += 1
             try:
                 frame = self._grab_video_frame()
             except Exception:  # noqa: BLE001 - a timeout; the next one may succeed
+                self._grabbed -= 1
                 if self._stop.is_set():
                     break
                 time.sleep(0.01)
                 continue
             t_ns = time.time_ns()
+            k = self._grabbed
+            exp_ns = int(self.v["exposure_ms"] * 1_000_000)
+            info = self._track(frame, k, t_ns - exp_ns // 2)
             rec = self._rec
             if rec is not None and not rec.stopping:
                 # SER times are the start of each exposure (approximate: arrival minus exposure).
-                rec.offer(frame, t_ns - int(self.v["exposure_ms"] * 1_000_000))
+                rec.offer(frame, t_ns - exp_ns, (info["roi"][0], info["roi"][1], int(self.v["bin"]),
+                                                 info["sensor_x"], info["sensor_y"], info["snr"], info["state"]))
             with self._lock:
                 if self._latest is None or self._latest.shape != frame.shape or self._latest.dtype != frame.dtype:
                     self._latest = np.empty_like(frame)
                 np.copyto(self._latest, frame)
                 self._latest_t = t_ns
+                self._latest_info = info
                 self._seq += 1
             n += 1
             now = time.monotonic()
             if now - t_last >= 1.0:
                 self._fps, t_last, n = n / (now - t_last), now, 0
 
+    def _track(self, frame: np.ndarray, k: int, t_mid_ns: int) -> dict:
+        """Tracking for frame k (video thread): measure, maybe move the ROI; the frame's info."""
+        cmd, self._track_cmd = self._track_cmd, None
+        if cmd is not None:
+            self._do_track_cmd(*cmd, k - 1)
+        ox, oy = self._origin_at(k)
+        h, w = frame.shape[:2]
+        b = int(self.v["bin"])
+        tr = self.tracker
+        info = {"roi": [ox, oy, w, h], "state": tr.state, "x": float("nan"), "y": float("nan"),
+                "sensor_x": float("nan"), "sensor_y": float("nan"), "snr": float("nan")}
+        if tr.state == "off":
+            return info
+        new = tr.update(frame, (ox, oy), b, t_mid_ns, self.roi_center(), 1 / self._fps if self._fps > 1 else 0.05)
+        info["state"] = tr.state
+        if tr.last is not None and tr.misses == 0:
+            d = tr.last
+            info.update(x=d.x, y=d.y, sensor_x=ox + d.x, sensor_y=oy + d.y, snr=d.snr)
+            if self.on_measure:
+                cx, cy = self.sensor[0] / b / 2 - 0.5, self.sensor[1] / b / 2 - 0.5
+                try:
+                    self.on_measure({"t_ns": t_mid_ns, "state": tr.state, "x": ox + d.x, "y": oy + d.y,
+                                     "dx": ox + d.x - cx, "dy": oy + d.y - cy, "roi": [ox, oy, w, h], "bin": b,
+                                     "flux": d.flux, "snr": d.snr, "vx": float(tr.vel[0]) / b, "vy": float(tr.vel[1]) / b,
+                                     "pixel_um": self.pixel_um * b})
+                except Exception:  # noqa: BLE001 - a subscriber problem must not stop the video
+                    pass
+        if new is not None:
+            self._move_roi(new, k)
+        return info
+
     def _latest_copy(self, after_seq: int = -1, timeout_s: float = 5.0):
         end = time.monotonic() + timeout_s
         while time.monotonic() < end:
             with self._lock:
                 if self._latest is not None and self._seq > after_seq:
+                    self._copied_info = dict(self._latest_info)
                     return self._latest.copy(), self._latest_t, self._seq
             time.sleep(0.002)
         raise CameraError("no frame from the camera")
@@ -436,6 +568,7 @@ class _ZwoBase:
         if not self._video:
             raise CameraError("live view is off")
         frame, _t, _s = self._latest_copy(timeout_s=max(2.0, self.v["exposure_ms"] / 1000 * 2 + 1))
+        self.preview_info = self._copied_info
         return self._display(frame), self.full_scale()
 
     def capture(self, bulb_s: float, abort: threading.Event, download_raw: bool) -> Shot:
@@ -446,13 +579,17 @@ class _ZwoBase:
             with self._lock:
                 seq = self._seq
             frame, t_end, _ = self._latest_copy(after_seq=seq, timeout_s=exp_s * 2 + 5)
+            origin = self._copied_info.get("roi", [None, None])[:2]
             note = "from the video stream"
         else:
             frame = self._snapshot(abort)
             t_end = time.time_ns()
+            origin = [None, None]
             note = "single exposure"
         t_start = t_end - int(exp_s * NS)
         x, y, w, h = self.roi()
+        if origin[0] is not None:
+            x, y = origin
         b = int(self.v["bin"])
         hdr = {
             "DATE-OBS": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t_start / NS)) + f".{t_start % NS // 1_000_000:03d}",
@@ -476,13 +613,16 @@ class _ZwoBase:
     def _end_video(self) -> None: ...
     def _grab_video_frame(self) -> np.ndarray: ...
     def _snapshot(self, abort: threading.Event) -> np.ndarray: ...
+    def _set_start_pos(self, x: int, y: int) -> None: ...
 
 
 # -- simulator --------------------------------------------------------------------------------
 class ZwoSimBackend(_ZwoBase):
-    """An ASI224MC on the C8: stars, sky glow and a bright extended target that wanders around
-    the centre (like a satellite with tracking error), with photon and read noise. Gain is
-    in the SDK's 0.1 dB units (e/ADU = 3.6 * 10^(-gain / 200)); 12-bit ADC."""
+    """An ASI224MC on the C8: stars, sky glow and a bright extended target that drifts across
+    the sensor (up to ~350 px from the centre, ~100 px/s: a satellite with along-track timing
+    and pointing errors) with some jitter, and photon and read noise. Gain is in the SDK's
+    0.1 dB units (e/ADU = 3.6 * 10^(-gain / 200)); 12-bit ADC. ROI moves reach the frames
+    roi_latency_frames later, like a real camera's pipeline."""
 
     simulated = True
     MAX_FPS = 60  # the simulator's own limit (frames are computed in numpy)
@@ -496,13 +636,14 @@ class ZwoSimBackend(_ZwoBase):
         sky = np.full((h, w), 2.0, np.float32)  # e-/px/ms of sky
         y, x = np.mgrid[0:h, 0:w]
         for _ in range(60):
-            cx, cy, f = rng.uniform(0, w), rng.uniform(0, h), 10 ** rng.uniform(1.5, 3.5)
+            cx, cy, f = rng.uniform(0, w), rng.uniform(0, h), 10 ** rng.uniform(1.0, 2.8)
             x0, x1, y0, y1 = int(max(cx - 8, 0)), int(min(cx + 8, w)), int(max(cy - 8, 0)), int(min(cy + 8, h))
             sky[y0:y1, x0:x1] += f * np.exp(-((x[y0:y1, x0:x1] - cx) ** 2 + (y[y0:y1, x0:x1] - cy) ** 2) / (2 * 1.6**2))
         self._sky = sky
         self._rng = rng
         self._t0 = time.monotonic()
         self._next = 0.0
+        self.drift = (350.0, 250.0)  # the target's slow excursion from the sensor centre, px
         bayer = np.ones((h, w), np.float32)
         bayer[0::2, 0::2], bayer[1::2, 1::2] = 0.8, 0.65
         self._bayer = bayer
@@ -515,24 +656,32 @@ class ZwoSimBackend(_ZwoBase):
             self._stop_video()
         self.stop_record("camera closed", wait_s=300)
 
-    def _frame(self) -> np.ndarray:
+    def target_xy(self, t: float | None = None) -> tuple[float, float]:
+        """Where the simulated target is (unbinned sensor px) at monotonic time t."""
+        t = (time.monotonic() if t is None else t) - self._t0
+        w, h = self.sensor
+        return (w / 2 + self.drift[0] * math.sin(0.2 * t) + 30 * math.sin(0.7 * t),
+                h / 2 + self.drift[1] * math.sin(0.15 * t + 1.0) + 20 * math.cos(0.9 * t) - self.drift[1] * math.sin(1.0))
+
+    def _frame(self, origin: tuple[int, int] | None = None) -> np.ndarray:
         x, y, w, h = self.roi()
+        if origin is not None:
+            x, y = origin
         b = int(self.v["bin"])
         exp_ms = self.v["exposure_ms"]
         sx, sy, sw, sh = x * b, y * b, w * b, h * b
         e = self._sky[sy:sy + sh, sx:sx + sw].copy()
-        # The target: a body and solar panels, wandering ~40 px around the centre. Computed in a
-        # small window around it only (the Pi computes these frames on the CPU).
-        t = time.monotonic() - self._t0
-        cx = self.sensor[0] / 2 + 40 * math.sin(0.7 * t) - sx
-        cy = self.sensor[1] / 2 + 25 * math.cos(0.9 * t) - sy
+        # The target: a body and solar panels. Computed in a small window around it only (the
+        # Pi computes these frames on the CPU).
+        tx, ty = self.target_xy()
+        cx, cy = tx - sx, ty - sy
         x0, x1 = max(int(cx) - 90, 0), min(int(cx) + 90, sw)
         y0, y1 = max(int(cy) - 24, 0), min(int(cy) + 24, sh)
         if x0 < x1 and y0 < y1:
             xx = (np.arange(x0, x1, dtype=np.float32) - cx)[None, :]
             yy = (np.arange(y0, y1, dtype=np.float32) - cy)[:, None]
-            e[y0:y1, x0:x1] += 400 * np.exp(-(xx**2 / 50 + yy**2 / 18))
-            e[y0:y1, x0:x1] += 250 * np.exp(-(xx**2 / 900 + yy**2 / 4)) * (np.abs(xx) > 6)
+            e[y0:y1, x0:x1] += 1500 * np.exp(-(xx**2 / 50 + yy**2 / 18))
+            e[y0:y1, x0:x1] += 800 * np.exp(-(xx**2 / 900 + yy**2 / 4)) * (np.abs(xx) > 6)
         e *= exp_ms * (self._bayer[sy:sy + sh, sx:sx + sw] if self.color else 1.0)
         if b > 1:
             e = e.reshape(h, b, w, b).sum(axis=(1, 3))
@@ -561,7 +710,7 @@ class ZwoSimBackend(_ZwoBase):
         if wait > 0 and self._stop.wait(wait):
             raise CameraError("stopped")
         self._next = max(self._next, now) + self._interval()
-        return self._frame()
+        return self._frame(self._origin_at(self._grabbed))
 
     def _snapshot(self, abort: threading.Event) -> np.ndarray:
         abort.wait(min(self.v["exposure_ms"] / 1000, 30))
@@ -665,6 +814,10 @@ class ZwoSdkBackend(_ZwoBase):
                 self._buf = bytearray(w * h * bpp)  # reused for every frame
         except asi.ZWO_Error as e:
             raise CameraError(f"{name}: {e}") from None
+
+    def _set_start_pos(self, x: int, y: int) -> None:
+        """Move the ROI while video runs (ASISetStartPos; the size stays)."""
+        self.cam.set_roi_start_position(x, y)
 
     def _begin_video(self) -> None:
         self.cam.start_video_capture()

@@ -21,7 +21,7 @@ WebSocket messages (JSON):
           aircraft {max_range_km, show, selected} (local ADS-B receiver: list, map, sky, the selected one's path),
           set_imaging {profile} (the active narrow-field imaging profile; broadcast as {"type": "imaging"}),
           camera {camera_id, set {name, value} | capture {bulb_s} | liveview | save_to | stretch | abort
-                  | record {on, duration_s, max_frames}}
+                  | record {on, duration_s, max_frames} | roi_track {on, x, y, recenter}}
             (to camera/<id>/cmd; status arrives as {"type": "camera"}, frames as {"type": "camframe"}),
           conjunction_detail {cat1, cat2, primary, tca_ns} (both paths, separation, the pass to track),
           enable/disable {axis} and fault_reset (straight to mount-rt),
@@ -259,6 +259,9 @@ class Gateway:
                "p99": f.p99, "saturated_frac": f.saturated_frac, "files": list(f.files), "exposure_s": f.exposure_s,
                "iso": f.iso, "shutter": f.shutter, "gain": f.gain, "bit_depth": f.bit_depth,
                "jpeg": base64.b64encode(f.jpeg).decode("ascii")}
+        if f.roi:
+            fin = lambda v: v if math.isfinite(v) else None  # noqa: E731 - JSON has no NaN
+            msg.update(roi=list(f.roi), track_state=f.track_state, track_x=fin(f.track_x), track_y=fin(f.track_y))
         if f.kind == "capture":
             self._last_capture[f.camera_id] = msg
         self._broadcast(msg)
@@ -278,6 +281,12 @@ class Gateway:
             cmd.stretch = bool(args["stretch"])
         elif "abort" in args:
             cmd.abort = True
+        elif "roi_track" in args:
+            r = args["roi_track"] or {}
+            cmd.roi_track.on = bool(r.get("on", True))
+            cmd.roi_track.recenter = bool(r.get("recenter", False))
+            if r.get("x") is not None and r.get("y") is not None:
+                cmd.roi_track.has_pick, cmd.roi_track.pick_x, cmd.roi_track.pick_y = True, float(r["x"]), float(r["y"])
         elif "record" in args:
             r = args["record"] or {}
             cmd.record.on = bool(r.get("on", True))

@@ -197,3 +197,10 @@ label.imaging select { max-width: 330px; }
 .toolbar.rec .fill.high > span { background: var(--warn); }
 .toolbar.rec .bad { color: var(--warn); }
 .btn.rec.on { background: var(--stop); color: var(--stop-text); border-color: var(--stop); }
+
+/* ROI tracking */
+.camview.img.pick { cursor: crosshair; }
+.camview svg.track-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.toolbar.track .sensormap { width: 52px; height: 39px; flex: none; }
+.toolbar.track .ok { color: var(--ok); }
+.toolbar.track .warn { color: var(--warn); }

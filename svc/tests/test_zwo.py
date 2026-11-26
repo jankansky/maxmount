@@ -169,6 +169,25 @@ def test_zwo_service_end_to_end(served, tmp_path):  # noqa: F811
             assert r.ok and r.message.startswith("recording stopped")
             status.wait(lambda s: not s.recording and "stopped" in s.message)
             assert cmd(gui, "zwo", liveview=False).ok
+            status.wait(lambda s: not s.liveview)
+            # ROI tracking: turns video on, locks, publishes centroids, and frames carry the ROI.
+            assert cmd(gui, "zwo", set=mpb.SetCameraSetting(name="roi", value="256x256")).ok
+            cents = Watch(gui, "camera/zwo/centroid", mpb.CameraCentroid)
+            try:
+                r = cmd(gui, "zwo", roi_track=mpb.RoiTrack(on=True))
+                assert r.ok and "brightest" in r.message
+                st = status.wait(lambda s: s.liveview and s.roi_tracking and s.track_state == "locked" and s.roi_moves > 0)
+                assert not st.roi_centered and abs(st.track_err_x) < 40
+                c = cents.wait(lambda c: c.state == "locked")
+                assert c.bin == 1 and list(c.roi)[2:] == [256, 256] and c.snr > 8 and c.t_ns > 0
+                f = frames.wait(lambda f: f.kind == "liveview" and len(f.roi) == 4 and f.track_state == "locked")
+                assert 0 <= f.track_x < 256 and 0 <= f.track_y < 256
+                assert not cmd(gui, "zwo", roi_track=mpb.RoiTrack(on=True, has_pick=True, pick_x=1.5, pick_y=0.5)).ok
+                assert cmd(gui, "zwo", roi_track=mpb.RoiTrack(on=False, recenter=True)).ok
+                status.wait(lambda s: not s.roi_tracking and s.roi_centered)
+            finally:
+                cents.sub.undeclare()
+            assert cmd(gui, "zwo", liveview=False).ok
         finally:
             status.sub.undeclare()
             frames.sub.undeclare()
@@ -233,6 +252,76 @@ def test_recorder_drops_when_the_disk_is_slow_and_stops_when_full(tmp_path, monk
     rec = zwo.Recorder(tmp_path / "f.ser", (4, 8), np.uint8, "MONO", 8, "test")
     rec.min_free_bytes = 1 << 62  # the disk fills up during the recording
     assert rec.wait(5) and rec.reason.startswith("disk nearly full")
+
+
+def test_roi_tracking_follows_the_simulated_target(tmp_path):
+    """The simulated target drifts hundreds of pixels; a 256 x 256 ROI follows it (moves take
+    effect 2 frames late), the recording's CSV logs each frame's ROI position, and Center ROI
+    puts it back."""
+    b = zwo.ZwoSimBackend()
+    b.open()
+    measures = []
+    b.on_measure = measures.append
+    try:
+        b.set("roi", "256x256")
+        b.set("exposure_ms", "5")
+        b.set_liveview(True)
+        b.set_roi_track(True)
+        time.sleep(1.0)
+        rec = b.start_record(tmp_path, "trk", max_s=3)
+        errs = []
+        while not rec.done.is_set():
+            time.sleep(0.1)
+            x, y, w, h = b.roi()
+            tx, ty = b.target_xy()
+            errs.append(np.hypot(tx - (x + (w - 1) / 2), ty - (y + (h - 1) / 2)))
+        st = b.extra_status()
+        assert st["track_state"] == "locked" and st["roi_moves"] > 10 and not st["roi_centered"]
+        assert max(errs) < 25 and np.median(errs) < 8, errs
+        assert measures and measures[-1]["state"] == "locked" and measures[-1]["roi"][2:] == [256, 256]
+        m = measures[-1]
+        assert abs(m["dx"] - (m["x"] - (1304 / 2 - 0.5))) < 1e-6 and m["pixel_um"] == 3.75
+        rows = (tmp_path / rec.path.with_suffix(".csv").name).read_text().splitlines()
+        assert rows[0].startswith("frame,t_utc_ns,roi_x,roi_y") and len(rows) == rec.frames + 1
+        cols = [r.split(",") for r in rows[1:]]
+        assert len({(c[2], c[3]) for c in cols}) > 5  # the ROI moved during the recording
+        assert all(c[8] == "locked" for c in cols) and all(c[5] for c in cols)
+        # Each logged position is where the frame really was read: the target found at the
+        # logged origin + its offset matches the simulator's (within the measurement error).
+        assert ser.read_ser(rec.path)["count"] == rec.frames
+        # A geometry change re-acquires; Center ROI stops tracking and recentres.
+        b.set("roi", "320x240")
+        time.sleep(0.5)
+        assert b.extra_status()["track_state"] == "locked"
+        b.set_roi_track(False, recenter=True)
+        time.sleep(0.3)
+        st = b.extra_status()
+        assert not st["roi_tracking"] and st["roi_centered"] and st["roi"] == [492, 368, 320, 240]
+    finally:
+        b.close()
+
+
+def test_roi_tracking_pick(tmp_path):
+    """Picking a point acquires the object there, not the brightest."""
+    b = zwo.ZwoSimBackend()
+    b.open()
+    try:
+        b.set("roi", "full")
+        b.set("exposure_ms", "5")
+        b.set_liveview(True)
+        time.sleep(0.3)
+        frame, _t, _s = b._latest_copy()
+        from maxmount_svc.roitrack import measure
+        tx, ty = b.target_xy()
+        # A star well away from the target, as the pick.
+        d = measure(frame, near=(tx + 300 if tx < 652 else tx - 300, 488), gate=200, snr_min=5)
+        assert d is not None and abs(d.x - tx) > 50
+        b.set_roi_track(True, pick=(d.x / 1304, d.y / 976))
+        time.sleep(0.5)
+        st = b.extra_status()
+        assert st["track_state"] == "locked" and abs(st["track_x"] - d.x) < 5 and abs(st["track_y"] - d.y) < 5
+    finally:
+        b.close()
 
 
 def test_sdk_backend_reports_a_missing_library(tmp_path):

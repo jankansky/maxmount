@@ -300,6 +300,36 @@ function RecordBar({ cam, cmd, disabled }) {
   </div>`;
 }
 
+// Overlay on a live frame: the ROI centre and the tracked target, in the frame's pixels (the
+// SVG's viewBox is the frame, and "meet" matches the image's object-fit: contain).
+function TrackOverlay({ frame }) {
+  if (!frame?.roi?.length) return null;
+  const [, , w, h] = frame.roi;
+  const r = Math.max(6, Math.min(w, h) * 0.04);
+  const found = frame.track_x != null && frame.track_y != null;
+  const col = frame.track_state === 'locked' ? 'var(--ok)' : 'var(--warn)';
+  return html`<svg class="track-overlay" viewBox=${`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+    <g stroke="var(--accent)" stroke-width=${Math.max(1, w / 400)} opacity="0.7">
+      <line x1=${w / 2 - r} y1=${h / 2} x2=${w / 2 + r} y2=${h / 2}></line><line x1=${w / 2} y1=${h / 2 - r} x2=${w / 2} y2=${h / 2 + r}></line></g>
+    ${found && html`<circle cx=${frame.track_x} cy=${frame.track_y} r=${r * 1.6} fill="none" stroke=${col} stroke-width=${Math.max(1.5, w / 250)}></circle>`}
+  </svg>`;
+}
+
+// Where the ROI is on the sensor (and so where the target is in the camera's field).
+function SensorMap({ cam }) {
+  const sw = Number(cam.sensor_width), sh = Number(cam.sensor_height);
+  if (!sw || !sh || cam.roi?.length !== 4) return null;
+  const bin = Number((cam.settings || []).find((x) => x.name === 'bin')?.value || 1);
+  const [x, y, w, h] = cam.roi.map((v) => Number(v) * bin);
+  return html`<svg class="sensormap" viewBox=${`0 0 ${sw} ${sh}`} role="img" aria-label=${`Sensor map: window at ${x}, ${y} of ${sw}×${sh}`}>
+    <title>ROI on the sensor: ${x}, ${y} (${w}×${h})</title>
+    <rect x="0" y="0" width=${sw} height=${sh} fill="none" stroke="var(--muted)" stroke-width=${sw / 60}></rect>
+    <line x1=${sw / 2} y1="0" x2=${sw / 2} y2=${sh} stroke="var(--grid)" stroke-width=${sw / 120}></line>
+    <line x1="0" y1=${sh / 2} x2=${sw} y2=${sh / 2} stroke="var(--grid)" stroke-width=${sw / 120}></line>
+    <rect x=${x} y=${y} width=${w} height=${h} fill="var(--accent)" fill-opacity="0.35" stroke="var(--accent)" stroke-width=${sw / 80}></rect>
+  </svg>`;
+}
+
 // ZWO camera on the C8 (`mount-svc zwo`): video with ROI, exposure, gain, offset, format, bin
 // and USB bandwidth; Capture saves one frame as FITS on the Pi; Record saves SER video.
 function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
@@ -327,12 +357,30 @@ function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
   };
   const roi = cam.roi?.length === 4 ? `${cam.roi[2]}×${cam.roi[3]}` : '';
   const temp = Number.isFinite(cam.temperature_c) ? ` · ${Number(cam.temperature_c).toFixed(1)} °C` : '';
+  const tracking = !!cam.roi_tracking;
+  // Click on the live image: pick the target while tracking, else zoom (focus).
+  const onImage = (e) => {
+    if (!(tracking && live)) { setZoom(!zoom); return; }
+    const img = e.currentTarget.querySelector('img');
+    if (!img || !shown.width) return;
+    const b = img.getBoundingClientRect();
+    const a = shown.width / shown.height;
+    const cw = Math.min(b.width, b.height * a), ch = cw / a;
+    const fx = (e.clientX - b.left - (b.width - cw) / 2) / cw, fy = (e.clientY - b.top - (b.height - ch) / 2) / ch;
+    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
+    cmd({ roi_track: { on: true, x: fx, y: fy } });
+  };
+  const err = Number.isFinite(Number(cam.track_err_x)) && cam.track_state === 'locked'
+    ? ` · off centre ${Number(cam.track_err_x).toFixed(1)}, ${Number(cam.track_err_y).toFixed(1)} px · SNR ${Number(cam.track_snr).toFixed(0)} · ${Number(cam.track_speed).toFixed(0)} px/s`
+    : '';
   return html`<section class="panel camera wide zwo" aria-label="C8 camera">
     <div class="head"><h2>${title}</h2>
       <span class="small mono">${cam.recording ? html`<span class="recdot">● REC</span> ` : ''}${cam.connected ? `${cam.state}${cam.liveview ? ` · ${Number(cam.fps).toFixed(1)} fps` : ''}${Number(cam.dropped) ? ` · ${cam.dropped} dropped` : ''}${temp}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
-    <div class=${'camview img' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre" onClick=${() => setZoom(!zoom)}>
+    <div class=${'camview img' + (zoom && !(tracking && live) ? ' zoom' : '') + (tracking && live ? ' pick' : '')}
+      title=${tracking && live ? 'click the target to track it' : 'click: 3× zoom on the centre'} onClick=${onImage}>
       ${shown ? html`<img alt=${live ? 'live view' : 'last frame'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
         : html`<span>${cam.connected ? 'Start video, or capture a frame.' : cam.message}${cam.connected ? '' : hint}</span>`}
+      ${live && !zoom && html`<${TrackOverlay} frame=${shown} />`}
       ${shown && html`<span class="tag">${live ? `LIVE · ${roi}` : `last frame · ${shown.exposure_s * 1000} ms · gain ${shown.gain} · ${shown.bit_depth}-bit`}${zoom ? ' · 3×' : ''}</span>`}
     </div>
     <div class="toolbar">
@@ -346,6 +394,16 @@ function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
       ${field('bandwidth')}
       <label class="check"><input type="checkbox" checked=${!!cam.stretch} onChange=${(e) => cmd({ stretch: e.target.checked })} /> Stretch</label>
       <button class="btn primary" disabled=${off} onClick=${() => cmd({ capture: { bulb_s: 0 } })}>${busy ? 'Saving…' : 'Capture frame'}</button>
+    </div>
+    <div class="toolbar track">
+      <button class=${'btn' + (tracking ? ' on' : '')} aria-pressed=${tracking} disabled=${off}
+        title="Move the ROI across the sensor to keep the target centred (turns video on). While on, click the image to pick the target."
+        onClick=${() => { setZoom(false); cmd({ roi_track: { on: !tracking } }); }}>${tracking ? 'Tracking ROI' : 'Track ROI'}</button>
+      <button class="btn" disabled=${off || cam.roi_centered} onClick=${() => cmd({ roi_track: { on: false, recenter: true } })}
+        title="Stop ROI tracking and put the ROI back at the sensor's centre">Center ROI</button>
+      <${SensorMap} cam=${cam} />
+      <span class="small mono">${tracking ? html`<span class=${cam.track_state === 'locked' ? 'ok' : 'warn'}>${cam.track_state}</span>${err}${tracking && cam.track_state !== 'locked' ? ' · click the target in the image' : ''}`
+        : (cam.roi_centered ? 'ROI at the sensor centre' : `ROI moved ${cam.roi?.[0]}, ${cam.roi?.[1]}`)}</span>
     </div>
     <${RecordBar} cam=${cam} cmd=${cmd} disabled=${off} />
     <div class="dslr-info">

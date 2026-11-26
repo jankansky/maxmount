@@ -403,7 +403,10 @@ class CameraService:
         s = self.client.session
         self._status_pub = s.declare_publisher(self.key("status"))
         self._frame_pub = s.declare_publisher(self.key("frame"))
-        self._decls = [s.declare_queryable(self.key("cmd"), self._on_cmd), self._status_pub, self._frame_pub,
+        self._centroid_pub = s.declare_publisher(self.key("centroid"))
+        if hasattr(self.backend, "on_measure"):
+            self.backend.on_measure = self._on_measure
+        self._decls = [s.declare_queryable(self.key("cmd"), self._on_cmd), self._status_pub, self._frame_pub, self._centroid_pub,
                        s.declare_subscriber(self.client.key("svc/status"), self._on_svc_status)]
         for fn in (self._camera_loop, self._status_loop):
             t = threading.Thread(target=fn, daemon=True, name=fn.__name__)
@@ -553,6 +556,8 @@ class CameraService:
                 result.update(ok=True, message="captured")
             elif which == "record":
                 result.update(ok=True, message=self._record(arg))
+            elif which == "roi_track":
+                result.update(ok=True, message=self._roi_track(arg))
         except CameraError as e:
             self._set(state="error" if which == "capture" else self._state, message=str(e))
             result.update(ok=False, message=str(e))
@@ -617,6 +622,39 @@ class CameraService:
         self._set(state="liveview" if was_live else "idle", exposure_s=0.0, exposure_end=0,
                   message=f"capture {n}: {len(shot.files)} file(s) {where}")
 
+    def _roi_track(self, arg) -> str:
+        b = self.backend
+        if not hasattr(b, "set_roi_track"):
+            raise CameraError("this camera has no ROI tracking")
+        pick = None
+        if arg.has_pick:
+            if not (0 <= arg.pick_x <= 1 and 0 <= arg.pick_y <= 1):
+                raise CameraError("pick_x and pick_y are fractions of the ROI (0..1)")
+            pick = (arg.pick_x, arg.pick_y)
+        if arg.on and not self._liveview:
+            b.set_liveview(True)
+            self._set(liveview=True, state="liveview")
+        b.set_roi_track(arg.on, pick, arg.recenter)
+        if arg.on:
+            msg = "ROI tracking: acquiring " + ("the object picked" if pick else "the brightest object")
+        else:
+            msg = "ROI tracking off"
+        if arg.recenter:
+            msg += "; ROI back to the sensor centre"
+        self._set(message=msg)
+        return msg
+
+    def _on_measure(self, m: dict) -> None:
+        """A tracking measurement from the backend's video thread -> camera/<id>/centroid."""
+        c = mpb.CameraCentroid(t_ns=int(m["t_ns"]), camera_id=self.id, state=m["state"], x=m["x"], y=m["y"], dx=m["dx"],
+                               dy=m["dy"], bin=int(m["bin"]), flux=m["flux"], snr=m["snr"], vx=m["vx"], vy=m["vy"],
+                               pixel_um=m["pixel_um"])
+        c.roi.extend(int(v) for v in m["roi"])
+        try:
+            self._centroid_pub.put(c.SerializeToString())
+        except Exception:  # noqa: BLE001
+            pass
+
     def _mount_snapshot(self) -> dict | None:
         with self._lock:
             svc = self._svc_status
@@ -680,7 +718,13 @@ class CameraService:
         a = getattr(self.backend, "preview_array", None)
         if a is not None:
             img, full = a()
-            return frame_from_array(img, "liveview", stretch, 1024, full_scale=full)
+            f = frame_from_array(img, "liveview", stretch, 1024, full_scale=full)
+            info = getattr(self.backend, "preview_info", None) or {}
+            if info.get("roi"):
+                f.roi.extend(int(v) for v in info["roi"])
+                f.track_state = info.get("state", "")
+                f.track_x, f.track_y = float(info.get("x", math.nan)), float(info.get("y", math.nan))
+            return f
         return frame_from_jpeg(self.backend.preview(), "liveview", stretch, 1024)
 
     # -- publishing ----------------------------------------------------------------------------
@@ -717,6 +761,12 @@ class CameraService:
                     st.disk_free_bytes = int(x["disk_free_bytes"])
                     st.record_max_s, st.record_max_frames = float(x["record_max_s"]), int(x["record_max_frames"])
                     st.record_stopping = bool(x.get("record_stopping", False))
+                if "track_state" in x:
+                    st.roi_tracking, st.track_state = bool(x["roi_tracking"]), str(x["track_state"])
+                    st.track_x, st.track_y = float(x["track_x"]), float(x["track_y"])
+                    st.track_err_x, st.track_err_y = float(x["track_err_x"]), float(x["track_err_y"])
+                    st.track_snr, st.track_speed = float(x["track_snr"]), float(x["track_speed"])
+                    st.roi_moves, st.roi_centered = int(x["roi_moves"]), bool(x.get("roi_centered", True))
             except Exception:  # noqa: BLE001 - status must not fail
                 pass
         return st

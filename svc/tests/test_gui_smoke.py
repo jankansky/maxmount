@@ -441,6 +441,17 @@ def test_zwo_panel(gui_url, served, tmp_path, engine):  # noqa: F811
             page.wait_for_function("() => /: stopped/.test(document.querySelector(\"[aria-label='C8 camera'] .dslr-info\").textContent)", timeout=15000)
             sers = list(tmp_path.glob("zwo/*/*.ser"))
             assert len(sers) == 2 and all(p.with_suffix(".json").exists() for p in sers)
+            # ROI tracking: lock, overlay on the target, the ROI moves; a click picks; Center ROI.
+            panel.get_by_role("button", name="Track ROI").click()
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] .toolbar.track\")?.textContent.includes('locked')", timeout=15000)
+            panel.locator("svg.track-overlay circle").wait_for(timeout=10000)
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] .toolbar.track\").textContent.includes('px/s')", timeout=10000)
+            box = panel.locator(".camview").bounding_box()
+            panel.locator(".camview").click(position={"x": box["width"] / 2, "y": box["height"] / 2})
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] .dslr-info\").textContent.includes('object picked')", timeout=10000)
+            assert panel.locator(".camview.zoom").count() == 0  # a click while tracking picks, it does not zoom
+            panel.get_by_role("button", name="Center ROI").click()
+            page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] .toolbar.track\").textContent.includes('ROI at the sensor centre')", timeout=10000)
             panel.get_by_role("button", name="Video on").click()
             panel.locator("img[alt='last frame']").wait_for(timeout=10000)
             assert "gain 300" in panel.locator(".tag").text_content()

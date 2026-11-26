@@ -92,6 +92,7 @@ removed; the planner's tests check the corrected statement.)
     1. The widefield GigE camera detects the satellite and measures its offset from prediction.
     2. `mount-svc` updates the time and cross-track offsets, which brings the target into the C8 field.
     3. The ZWO camera tracks a small region of interest at 50–200 fps and holds the target centered.
+       Done so far: the ROI follows the target across the sensor (`roitrack.py`: block-sum detection, gated lock, alpha-beta filter, ROI moves that allow for the camera's pipeline latency), and each frame's offset from the sensor centre is published on `camera/zwo/centroid`. Not yet: mount-svc turning those offsets into time and cross-track corrections.
 - **Hand control:** jog and offset commands from the GUI apply on top of any target.
 
 ## Timekeeping

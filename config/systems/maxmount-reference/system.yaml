@@ -124,6 +124,8 @@ cameras:
     liveview_fps: 8           # previews to the GUI; the camera itself streams faster
     record_buffer_mb: 512     # SER recording: frames held in RAM while the SD card catches up
     record_min_free_mb: 2048  # recording stops when the disk has less free space than this
+    roi_latency_frames: 2     # ROI tracking: frames still read at the old ROI position after a move
+                              # (to be measured on the real camera)
 
 # ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
 # 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.

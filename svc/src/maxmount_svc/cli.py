@@ -336,6 +336,7 @@ def cmd_zwo(args, sys_: SystemSettings) -> int:
         backend = ZwoSimBackend() if (args.sim or cfg.backend == "sim") else ZwoSdkBackend(cfg.sdk_lib)
         backend.record_buffer_bytes = int(cfg.record_buffer_mb * 1e6)
         backend.record_min_free_bytes = int(cfg.record_min_free_mb * 1e6)
+        backend.roi_latency_frames = backend.tracker.latency_frames = int(cfg.roi_latency_frames)
     except CameraError as e:
         print(f"mount-svc: {e}", file=sys.stderr)
         return 1

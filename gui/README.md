@@ -119,7 +119,11 @@ it, **Drives** (`#drives`).
     saves the next frame at full bit depth as FITS on the Pi; Record SER records the video
     stream to a SER file on the Pi for a set time or number of frames (0 = until Stop),
     showing elapsed time, frames, size, the RAM buffer's fill, frames dropped because the disk
-    fell behind, and free disk space (format, bin and ROI are fixed while recording);
+    fell behind, and free disk space (format, bin and ROI are fixed while recording); Track
+    ROI moves the ROI across the sensor to keep the target centred (it locks onto the
+    brightest object; while tracking, click the image to pick another), with a circle on the
+    target, a cross at the ROI centre, a small sensor map showing where the ROI is, and the
+    target's offset, SNR and speed; Center ROI puts the ROI back in the middle;
     histogram and statistics as for the D500;
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets.
