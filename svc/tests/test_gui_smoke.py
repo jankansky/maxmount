@@ -148,28 +148,28 @@ def test_pass_preview(gui_url, monkeypatch):
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-        page.goto(gui_url)
+        page.goto(gui_url + "#passes")
+        assert page.locator("[aria-label='Ground track'] canvas").is_visible()
         rows = page.locator("[aria-label=Passes] tbody tr")
         try:
             rows.first.wait_for(timeout=60000)
         except Exception:
             raise AssertionError(page.locator("[aria-label=Passes] .small").first.text_content() + " | " + page.locator(".statusline").text_content())
         rows.nth(1).click()
-        page.wait_for_selector(".preview-note", timeout=15000)
-        assert "ISS" in page.locator(".preview-note").text_content()
+        page.wait_for_selector("[aria-label='Pass details'] table.kv", timeout=15000)
+        detail = page.locator("[aria-label='Pass details']").text_content()
+        assert "ISS" in detail and "AOS" in detail and "Lighting" in detail
         assert rows.nth(1).get_attribute("aria-selected") == "true"
-        page.get_by_role("tab", name="Ground track").click()
         page.get_by_text("AOS to LOS").wait_for(timeout=5000)
-        page.get_by_role("tab", name="Sky").click()
         # A refused Track (the test machine's clock is unknown or too poor, and the 2008 pass is
         # long over) must leave the preview in place.
         rows.nth(1).get_by_role("button", name="Track").click()
         page.wait_for_function("() => document.querySelector('.statusline').textContent.includes('target: refused')", timeout=15000)
-        assert page.locator(".preview-note").is_visible()
+        assert page.locator("[aria-label='Pass details'] table.kv").is_visible()
         if page.locator(".clockwarn").count():
             page.locator(".clockwarn").get_by_label("Track anyway").check()
         rows.nth(1).click()  # again: clears
-        page.wait_for_selector(".preview-note", state="detached", timeout=5000)
+        page.wait_for_selector("[aria-label='Pass details'] table.kv", state="detached", timeout=5000)
         # Changing a selector searches again by itself; 'all in group' hides the watch list.
         calls = len(seen)
         page.get_by_label("Max el ≥").select_option("30")
@@ -182,8 +182,12 @@ def test_pass_preview(gui_url, monkeypatch):
         page.get_by_label("Max el ≥").select_option("0")
         page.wait_for_timeout(1500)
         rows.nth(0).press("Enter")
-        page.wait_for_selector(".preview-note", timeout=15000)
-        page.locator(".preview-note").get_by_role("button", name="Clear").click()
-        page.wait_for_selector(".preview-note", state="detached", timeout=5000)
+        page.wait_for_selector("[aria-label='Pass details'] table.kv", timeout=15000)
+        page.locator("[aria-label='Pass details']").get_by_role("button", name="Clear").click()
+        page.wait_for_selector("[aria-label='Pass details'] table.kv", state="detached", timeout=5000)
+        # The Track screen no longer has the passes table; its sky panel shows the live target.
+        page.locator("nav").get_by_role("button", name="Track").click()
+        assert page.evaluate("() => location.hash") == ""
+        assert not page.locator("[aria-label=Passes]").is_visible()
         browser.close()
     assert not errors, errors

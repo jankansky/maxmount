@@ -33,8 +33,9 @@ function Chip({ cls = '', children, title }) {
   return html`<span class=${'chip mono ' + cls} title=${title}>${children}</span>`;
 }
 
-const SCREENS = [['track', 'Track'], ['drives', 'Drives']];
-const LATER = ['Satellite events', 'Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
+const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives']];
+const screenFromHash = () => { const h = location.hash.slice(1); return SCREENS.some(([id]) => id === h) ? h : 'track'; };
+const LATER = ['Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
 
 function Header({ theme, setTheme, line, status, tel, hello, connected, screen, setScreen }) {
   const clk = status ? Number(status.clock_error_us) : -1;
@@ -231,7 +232,7 @@ function Corrections({ status, send }) {
   </section>`;
 }
 
-function Passes({ hello, send, status, connected, preview, setPreview }) {
+function Passes({ hello, send, status, connected, preview, setPreview, updatePreviewRow, setScreen }) {
   const [group, setGroup] = useState(loadPref('group', 'stations'));
   const [names, setNames] = useState(loadPref('watch', 'ISS (ZARYA), CSS (TIANHE)'));
   const [hours, setHours] = useState(loadPref('hours', 12));
@@ -262,7 +263,10 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
   // Rows from an all-in-group search are planned on demand (planning takes ~0.25 s a pass).
   const planRow = async (p) => {
     const r = await send('pass_plan', { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns, set_ns: p.set_ns });
-    if (r.ok) setRows((rs) => rs.map((x) => (passKey(x) === passKey(p) ? { ...r.data.pass, rise_ns: p.rise_ns } : x)));
+    if (!r.ok) return;
+    const row = { ...r.data.pass, rise_ns: p.rise_ns, also: p.also };
+    setRows((rs) => rs.map((x) => (passKey(x) === passKey(p) ? row : x)));
+    updatePreviewRow(row);
   };
   // Satellites need an accurate clock: mount-svc refuses a pass when chrony's error bound is
   // above time.max_clock_error_us, unless the operator explicitly overrides it here.
@@ -276,8 +280,9 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
     const r = await send('target', { track_tle: { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns },
       allow_clock_error: clockBad && override });
     setNote(r.message);
-    if (r.ok) setPreview(null); // the live track takes over; keep the preview if refused
+    if (r.ok) { setPreview(null); setTracked(p.name); } // the live track takes over; keep the preview if refused
   };
+  const [tracked, setTracked] = useState('');
   const clkMs = clk / 1000;
   return html`<section class="panel" aria-label="Passes">
     <div class="tabs" role="tablist">
@@ -313,7 +318,10 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
       <label class="arm"><input type="checkbox" checked=${override} onChange=${(e) => setOverride(e.target.checked)} />
         Track anyway</label>
     </div>`}
-    <span class="small">${note}${rows.length ? ' · click a pass to preview it on the Sky and Ground track views' + (all ? ' and plan it' : '') : ''}</span>
+    ${tracked && status?.target_name && html`<div class="gotrack" role="status">
+      <span><b>${status.target_name}</b>: ${status.message || 'planned'}</span>
+      <button class="btn primary" onClick=${() => { setTracked(''); setScreen('track'); }}>Open the Track screen →</button></div>`}
+    <span class="small">${note}${rows.length ? ' · click a pass to preview it' + (all ? ' and plan it' : '') : ''}</span>
     <div class="tablewrap"><table>
       <thead><tr><th>Object</th><th>AOS (UTC)</th><th>Dur</th><th>Max el</th><th>Plan</th><th>Peak az rate</th><th></th></tr></thead>
       <tbody class="mono">
@@ -347,7 +355,7 @@ function Passes({ hello, send, status, connected, preview, setPreview }) {
 
 const passKey = (p) => `${p.name}|${p.rise_ns}`;
 
-function SkyPanel({ status, tel, hello, track, land, theme, preview, clearPreview }) {
+function SkyPanel({ status, tel, hello, track, land }) {
   const [view, setView] = useState(loadPref('skyview', 'sky'));
   const ref = useRef(null);
   useEffect(() => {
@@ -360,10 +368,9 @@ function SkyPanel({ status, tel, hello, track, land, theme, preview, clearPrevie
         target: status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
         mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
         sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
-        preview: preview?.sky || null,
       });
     } else {
-      drawMap(c, { land, track: preview?.ground || (status?.tle_line1 ? track : null) });
+      drawMap(c, { land, track: status?.tle_line1 ? track : null });
     }
   });
   const pick = (v) => { setView(v); savePref('skyview', v); };
@@ -373,12 +380,65 @@ function SkyPanel({ status, tel, hello, track, land, theme, preview, clearPrevie
       <button role="tab" class=${view === 'map' ? 'on' : ''} aria-selected=${view === 'map'} onClick=${() => pick('map')}>Ground track</button>
     </div>
     <canvas ref=${ref} role="img" aria-label=${view === 'sky' ? 'Sky dome: mount, target, planned track, horizon mask' : 'World map: satellite ground track and visibility circle'}></canvas>
-    ${preview && html`<div class="preview-note"><span><b>Preview:</b> ${preview.label}</span>
-      <button class="btn" style="min-height:26px" onClick=${clearPreview}>Clear</button></div>`}
     <span class="small">${view === 'sky'
-      ? 'North up, east left · dashed: planned track · ring: mount · dot: target' + (preview ? ' · orange: preview, solid where sunlit, dotted in shadow' : '')
-      : preview ? 'thick: above the horizon mask, AOS to LOS · thin: 15 min either side · circle: visible at culmination'
-      : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask' : 'Ground track shows when the target is a satellite, or when you click a pass.'}</span>
+      ? 'North up, east left · dashed: planned track · ring: mount · dot: target'
+      : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask' : 'Ground track shows when the target is a satellite (choose one on the Passes screen).'}</span>
+  </section>`;
+}
+
+// Passes screen: large ground track and sky views of the selected pass (or the live target).
+function PassViews({ status, tel, hello, track, land, preview }) {
+  const mapRef = useRef(null), skyRef = useRef(null);
+  useEffect(() => {
+    if (mapRef.current) drawMap(mapRef.current, { land, track: preview?.ground || (status?.tle_line1 ? track : null) });
+    if (skyRef.current) drawSky(skyRef.current, {
+      maskEl: hello?.tracking?.horizon_min_el_deg ?? 10,
+      path: (status?.path || []).map((p) => [Number(p.az_deg), Number(p.el_deg)]),
+      target: status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
+      mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
+      sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
+      preview: preview?.sky || null,
+    });
+  });
+  return html`<div class="pv-views">
+    <section class="panel" aria-label="Ground track">
+      <div class="head"><h2>Ground track</h2><span class="small">${preview ? preview.row.name : status?.tle_line1 ? status.target_name + ' (live)' : ''}</span></div>
+      <canvas ref=${mapRef} role="img" aria-label="Map: ground track, visibility circle, site"></canvas>
+      <span class="small">${preview ? 'Thick: above the horizon mask, AOS to LOS · thin: 15 min either side · circle: visible at culmination · triangle: site'
+        : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask'
+        : 'Select a pass in the table to see its ground track.'}</span>
+    </section>
+    <section class="panel" aria-label="Sky">
+      <div class="head"><h2>Sky</h2></div>
+      <canvas ref=${skyRef} role="img" aria-label="Sky dome: pass path, mount, target, horizon mask"></canvas>
+      <span class="small">North up, east left · selected pass: solid where sunlit, dotted in shadow · dashed: tracking plan · ring: mount</span>
+    </section></div>`;
+}
+
+function PassDetail({ preview, status, clearPreview }) {
+  if (!preview) {
+    return html`<section class="panel" aria-label="Pass details"><div class="head"><h2>Pass</h2></div>
+      <p class="small">Click a pass in the table to preview it here: path across the sky, ground track, and whether the satellite is sunlit. ${status?.target_name ? html`<br /><br />Current target: <b>${status.target_name}</b>.` : ''}</p></section>`;
+  }
+  const p = preview.row, sky = preview.sky;
+  const top = sky.reduce((a, b) => (b[1] > a[1] ? b : a), sky[0]);
+  const ch = p.chosen || {};
+  const az = (a) => `${a.toFixed(0)}° ${['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(a / 45) % 8]}`;
+  const row = (k, v) => html`<tr><th>${k}</th><td>${v}</td></tr>`;
+  return html`<section class="panel" aria-label="Pass details">
+    <div class="head"><h2>${p.name}</h2><span class="small">${p.also?.length ? '+ ' + p.also.join(', ') : ''}</span>
+      <button class="btn" style="min-height:26px;margin-left:auto" onClick=${clearPreview}>Clear</button></div>
+    <table class="kv mono"><tbody>
+      ${row('AOS', `${utc(p.rise_ns)} · az ${az(sky[0][0])}`)}
+      ${row('Max el', `${utc(p.culmination_ns)} · ${Number(p.max_el_deg).toFixed(1)}° at az ${az(top[0])}`)}
+      ${row('LOS', `${utc(p.set_ns)} · az ${az(sky[sky.length - 1][0])}`)}
+      ${row('Duration', dur((Number(p.set_ns) - Number(p.rise_ns)) / 1e9))}
+      ${row('Lighting', preview.sunlit)}
+      ${row('Plan', p.planned === false ? 'planning…' : ch.mode ? `${ch.mode}${ch.mode === 'over_the_top' ? ` (error ${Number(ch.max_error_deg).toFixed(1)}°)` : ''}` : 'no plan fits')}
+      ${ch.mode && row('Peak rates', `az ${Number(ch.peak_az_deg_s).toFixed(2)} °/s · el ${Number(ch.peak_el_deg_s).toFixed(2)} °/s`)}
+    </tbody></table>
+    ${!ch.mode && p.planned !== false && html`<ul class="small problems">${(p.plans || []).map((x) => html`<li><b>${x.mode}</b>: ${(x.problems || []).join('; ')}</li>`)}</ul>`}
+    <p class="small">Use <b>Track</b> in the table, then follow it on the Track screen.</p>
   </section>`;
 }
 
@@ -456,7 +516,7 @@ function App() {
   const [land, setLand] = useState(null);
   const [now, setNow] = useState(Date.now());
   const history = useRef({ az: [], el: [], lat: [] });
-  const [screen, setScreenState] = useState(() => (location.hash === '#drives' ? 'drives' : 'track'));
+  const [screen, setScreenState] = useState(screenFromHash);
   const events = useRef([]);
   const faults = useRef({});
   const prevTel = useRef(null);
@@ -466,7 +526,7 @@ function App() {
 
   const setScreen = (id) => { setScreenState(id); location.hash = id === 'track' ? '' : id; };
   useEffect(() => {
-    const onHash = () => setScreenState(location.hash === '#drives' ? 'drives' : 'track');
+    const onHash = () => setScreenState(screenFromHash());
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -517,9 +577,9 @@ function App() {
     if (!p) { setPreviewState(null); return; }
     const r = await send('pass_preview', { name: p.name, line1: p.line1, line2: p.line2, rise_ns: p.rise_ns, culmination_ns: p.culmination_ns, set_ns: p.set_ns });
     if (previewReq.current !== passKey(p)) return; // a newer click won
-    setPreviewState(r.ok ? { key: passKey(p), ...r.data,
-      label: `${p.name}, AOS ${utc(p.rise_ns)} UTC, max el ${Number(p.max_el_deg).toFixed(0)}°, ${r.data.sunlit}` } : null);
+    setPreviewState(r.ok ? { key: passKey(p), ...r.data, row: p } : null);
   }, [send]);
+  const updatePreviewRow = useCallback((row) => setPreviewState((pv) => (pv && pv.key === passKey(row) ? { ...pv, row } : pv)), []);
   const openDialog = () => dialogRef.current?.showModal();
 
   return html`
@@ -528,6 +588,14 @@ function App() {
     <div class="layout" hidden=${screen !== 'drives'}>
       <${DrivesScreen} tel=${tel} hello=${hello} status=${status} send=${send}
         history=${history.current} now=${now} events=${events.current} faults=${faults.current} />
+    </div>
+    <div class="passes-screen" hidden=${screen !== 'passes'}>
+      <${PassViews} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} preview=${preview} />
+      <div class="pv-lower">
+        <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview}
+          updatePreviewRow=${updatePreviewRow} setScreen=${setScreen} />
+        <${PassDetail} preview=${preview} status=${status} clearPreview=${() => setPreview(null)} />
+      </div>
     </div>
     <div class="layout" hidden=${screen !== 'track'}>
       <aside class="col-left">
@@ -540,11 +608,9 @@ function App() {
           <${CameraPanel} title="C8 · ZWO" info="ROI" square=${true} />
         </div>
         <${Corrections} status=${status} send=${send} />
-        <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview} />
       </main>
       <aside class="col-right">
-        <${SkyPanel} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} theme=${theme}
-          preview=${preview} clearPreview=${() => setPreview(null)} />
+        <${SkyPanel} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} />
         <${TelemetryPanel} status=${status} history=${history.current} now=${now} />
       </aside>
     </div>
