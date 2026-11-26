@@ -107,7 +107,7 @@ def test_simulator_video_and_capture():
     try:
         time.sleep(1.5)
         st = b.extra_status()
-        assert 30 < st["fps"] <= 61 and st["roi"] == [332, 248, 640, 480] and st["sensor_width"] == 1304
+        assert 10 < st["fps"] <= 61 and st["roi"] == [332, 248, 640, 480] and st["sensor_width"] == 1304
         img, full = b.preview_array()
         assert img.shape == (240, 320, 3) and full == 255  # superpixel debayer
         b.set("roi", "320x240")  # geometry changes restart the stream
@@ -140,7 +140,7 @@ def test_zwo_service_end_to_end(served, tmp_path):  # noqa: F811
             assert cmd(gui, "zwo", set=mpb.SetCameraSetting(name="exposure_ms", value="4")).ok
             assert not cmd(gui, "zwo", set=mpb.SetCameraSetting(name="gain", value="600")).ok
             assert cmd(gui, "zwo", liveview=True).ok
-            st = status.wait(lambda s: s.liveview and s.fps > 20)
+            st = status.wait(lambda s: s.liveview and s.fps > 10)  # (the Pi computes simulated frames more slowly)
             assert list(st.roi) == [332, 248, 640, 480]
             frames.wait(lambda f: f.kind == "liveview" and f.width == 320)
             assert cmd(gui, "zwo", set=mpb.SetCameraSetting(name="image_type", value="RAW16")).ok

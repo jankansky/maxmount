@@ -317,17 +317,24 @@ class ZwoSimBackend(_ZwoBase):
         exp_ms = self.v["exposure_ms"]
         sx, sy, sw, sh = x * b, y * b, w * b, h * b
         e = self._sky[sy:sy + sh, sx:sx + sw].copy()
-        # The target: a body and solar panels, wandering ~40 px around the centre.
+        # The target: a body and solar panels, wandering ~40 px around the centre. Computed in a
+        # small window around it only (the Pi computes these frames on the CPU).
         t = time.monotonic() - self._t0
         cx = self.sensor[0] / 2 + 40 * math.sin(0.7 * t) - sx
         cy = self.sensor[1] / 2 + 25 * math.cos(0.9 * t) - sy
-        yy, xx = np.mgrid[0:sh, 0:sw].astype(np.float32)
-        e += 400 * np.exp(-((xx - cx) ** 2 / 50 + (yy - cy) ** 2 / 18))
-        e += 250 * np.exp(-((xx - cx) ** 2 / 900 + (yy - cy) ** 2 / 4)) * (np.abs(xx - cx) > 6)
+        x0, x1 = max(int(cx) - 90, 0), min(int(cx) + 90, sw)
+        y0, y1 = max(int(cy) - 24, 0), min(int(cy) + 24, sh)
+        if x0 < x1 and y0 < y1:
+            xx = (np.arange(x0, x1, dtype=np.float32) - cx)[None, :]
+            yy = (np.arange(y0, y1, dtype=np.float32) - cy)[:, None]
+            e[y0:y1, x0:x1] += 400 * np.exp(-(xx**2 / 50 + yy**2 / 18))
+            e[y0:y1, x0:x1] += 250 * np.exp(-(xx**2 / 900 + yy**2 / 4)) * (np.abs(xx) > 6)
         e *= exp_ms * (self._bayer[sy:sy + sh, sx:sx + sw] if self.color else 1.0)
         if b > 1:
             e = e.reshape(h, b, w, b).sum(axis=(1, 3))
-        e = e + self._rng.normal(0, 1, e.shape).astype(np.float32) * np.sqrt(e + 4.0)  # photons + 2 e- read noise
+        noise = self._rng.standard_normal(e.shape, dtype=np.float32)
+        noise *= np.sqrt(e + 4.0)  # photons + 2 e- read noise
+        e += noise
         egain = 3.6 * 10 ** (-self.v["gain"] / 200)
         adu = np.clip(e / egain + self.v["offset"] * 4, 0, 4095)
         t_ = self.v["image_type"]
