@@ -32,7 +32,7 @@ const DI_BITS = [[0, 'neg. limit'], [1, 'pos. limit'], [2, 'home']];
 const VENDOR_DECODERS = {
   // Technosoft Motion Error Register (MER); technosoftmotion.com ESM-um-html/tml_mer.htm.
   technosoft_mer: [
-    [0, 'CAN bus error'], [1, 'short-circuit'], [2, 'invalid setup table'], [3, 'control error'],
+    [0, 'bus communication error (EtherCAT/CAN)'], [1, 'short-circuit'], [2, 'invalid setup table'], [3, 'control error'],
     [4, 'serial/internal communication error'], [5, 'Hall / resolver / BiSS / position wrap-around error'],
     [6, 'positive limit switch active'], [7, 'negative limit switch active'], [8, 'over-current'],
     [9, 'I²t protection (drive or motor)'], [10, 'motor over-temperature'], [11, 'drive over-temperature'],

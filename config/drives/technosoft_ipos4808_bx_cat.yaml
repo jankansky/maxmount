@@ -60,7 +60,9 @@ units:
 
 # Read by SDO when the drive enters Fault and shown on the GUI's Drives screen.
 # Motion Error Register (MER): bit meanings from Technosoft's MER reference page; the CoE
-# object index 0x2000 is from the iPOS EtherCAT manual. CHECK on the drive (slaveinfo -sdo).
+# object index 0x2000 is from the iPOS EtherCAT manual. Checked on the az drive 2026-11-25:
+# 0x2000:00 is UNSIGNED16 read-only (the drive gives no object names). It read 0x0001
+# (bit 0, bus communication error) with the master stopped.
 diagnostics:
   error_register: {index: 0x2000, sub: 0, size: 2, name: MER, decode: technosoft_mer}
 
