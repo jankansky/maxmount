@@ -62,6 +62,7 @@ message CameraStatus {
   double record_max_s = 34;     // 0: no time limit
   int64 record_max_frames = 35; // 0: no frame limit
   bool records_video = 36;      // the camera can record video
+  bool record_stopping = 37;    // stopped; still writing the frames queued in RAM
 }
 
 message SetCameraSetting {

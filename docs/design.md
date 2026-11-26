@@ -426,7 +426,7 @@ Dark theme by default with a red night mode. Monospace figures for positions and
 Safety-critical state is never more than a glance away.
 
 **Compute.** Widefield motion detection fits on the Pi 4. Recording high-rate narrow-field
-video needs a USB 3 SSD. Machine-learning detection (bird or not) needs an accelerator (Coral,
+video needs a USB 3 SSD: the Pi's SD card sustains about 34 MB/s, and the ZWO streams up to ~190 MB/s full frame (SER recording buffers bursts in RAM and counts the frames it drops). Machine-learning detection (bird or not) needs an accelerator (Coral,
 Hailo) or runs on the laptop. The camera service publishes over Zenoh, so either placement works.
 
 ## Genericity and portability

@@ -221,7 +221,8 @@ class Recorder:
         return {"recording": not self.done.is_set(), "record_file": str(self.path), "record_frames": self.frames,
                 "record_dropped": self.dropped, "record_elapsed_s": self.elapsed_s, "record_bytes": self.writer.bytes_written,
                 "record_queued": self.queued, "record_pool": self.pool_frames, "disk_free_bytes": self.free_bytes,
-                "record_max_s": self.max_s, "record_max_frames": self.max_frames}
+                "record_max_s": self.max_s, "record_max_frames": self.max_frames,
+                "record_stopping": self.stopping and not self.done.is_set()}
 
 
 # -- shared base: settings, ROI, video thread ------------------------------------------------
@@ -338,7 +339,7 @@ class _ZwoBase:
     def start_record(self, directory: Path, stem: str, max_frames: int = 0, max_s: float = 0.0, on_done=None) -> Recorder:
         """Record the video stream (which must be running) to <directory>/<stem>_<format>_<w>x<h>.ser."""
         if self.recording:
-            raise CameraError("already recording")
+            raise CameraError("still writing the last recording" if self._rec.stopping else "already recording")
         if not self._video:
             raise CameraError("start video before recording")
         shape, dtype = self.frame_shape()
@@ -355,11 +356,14 @@ class _ZwoBase:
             raise CameraError(f"cannot record to {path}: {e}") from None
         return self._rec
 
-    def stop_record(self, reason: str = "stopped", wait_s: float = 30.0) -> Recorder | None:
+    def stop_record(self, reason: str = "stopped", wait_s: float = 0.0) -> Recorder | None:
+        """Stop recording. The writer finishes the frames still queued in RAM afterwards (with
+        a slow card, many seconds); wait_s > 0 waits for that."""
         rec = self._rec
         if rec is not None and not rec.done.is_set():
             rec.stop(reason)
-            rec.wait(wait_s)
+            if wait_s:
+                rec.wait(wait_s)
         return rec
 
     # -- video ------------------------------------------------------------------------------
@@ -509,6 +513,7 @@ class ZwoSimBackend(_ZwoBase):
     def close(self) -> None:
         if self._video:
             self._stop_video()
+        self.stop_record("camera closed", wait_s=300)
 
     def _frame(self) -> np.ndarray:
         x, y, w, h = self.roi()
@@ -620,6 +625,7 @@ class ZwoSdkBackend(_ZwoBase):
     def close(self) -> None:
         if self._video:
             self._stop_video()
+        self.stop_record("camera closed", wait_s=300)
         if self.cam is not None:
             try:
                 self.cam.close()

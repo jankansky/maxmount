@@ -166,7 +166,7 @@ def test_zwo_service_end_to_end(served, tmp_path):  # noqa: F811
             status.wait(lambda s: s.recording and s.record_frames > 5)
             assert not cmd(gui, "zwo", set=mpb.SetCameraSetting(name="bin", value="2")).ok
             r = cmd(gui, "zwo", record=mpb.Record(on=False))
-            assert r.ok and r.message == "recording stopped"
+            assert r.ok and r.message.startswith("recording stopped")
             status.wait(lambda s: not s.recording and "stopped" in s.message)
             assert cmd(gui, "zwo", liveview=False).ok
         finally:
@@ -206,7 +206,7 @@ def test_recording_formats_limits_and_locks(tmp_path):
         rec = b.start_record(tmp_path, "v")
         time.sleep(0.2)
         b.set_liveview(False)
-        assert rec.done.is_set() and rec.reason == "video stopped" and rec.frames > 0
+        assert rec.wait(10) and rec.reason == "video stopped" and rec.frames > 0
         st = b.extra_status()
         assert not st["recording"] and st["record_frames"] == rec.frames
     finally:
@@ -222,9 +222,11 @@ def test_recorder_drops_when_the_disk_is_slow_and_stops_when_full(tmp_path, monk
     for i in range(10):
         rec.offer(np.full((4, 8), i, np.uint8), i + 1)
     assert rec.accepted == 4 and rec.dropped == 6  # never blocks the video thread
+    rec.stop()  # returns at once; the writer finishes the queue afterwards
+    st = rec.status()
+    assert st["recording"] and st["record_stopping"] and st["record_queued"] >= 3
     slow.set()
-    rec.stop()
-    assert rec.wait(5) and rec.frames == 4
+    assert rec.wait(5) and rec.frames == 4 and not rec.status()["record_stopping"]
     assert [int(f[0, 0]) for f in ser.read_ser(rec.path)["frames"]] == [0, 1, 2, 3]
     with pytest.raises(CameraError, match="free"):
         zwo.Recorder(tmp_path / "full.ser", (4, 8), np.uint8, "MONO", 8, "test", min_free_bytes=1 << 62)

@@ -283,7 +283,8 @@ function RecordBar({ cam, cmd, disabled }) {
     const fill = Number(cam.record_pool) ? Number(cam.record_queued) / Number(cam.record_pool) : 0;
     const left = Number(cam.record_max_s) ? ` / ${Number(cam.record_max_s)} s` : '';
     return html`<div class="toolbar rec">
-      <button class="btn rec on" aria-label="Stop recording" onClick=${() => cmd({ record: { on: false } })}>■ Stop</button>
+      ${cam.record_stopping ? html`<button class="btn rec" disabled>Finishing… ${cam.record_queued} to write</button>`
+        : html`<button class="btn rec on" aria-label="Stop recording" onClick=${() => cmd({ record: { on: false } })}>■ Stop</button>`}
       <span class="mono small">${`${Number(cam.record_elapsed_s).toFixed(1)} s${left} · ${cam.record_frames}${Number(cam.record_max_frames) ? ` / ${cam.record_max_frames}` : ''} frames · ${mb(cam.record_bytes)} · `}
         <span title=${`RAM buffer: ${cam.record_queued} of ${cam.record_pool} frames waiting for the disk`}>buffer <span class=${'fill' + (fill > 0.8 ? ' high' : '')}><span style=${`width:${Math.round(fill * 100)}%`}></span></span></span>
         ${Number(cam.record_dropped) ? html`${' · '}<span class="bad">${cam.record_dropped} dropped</span>` : ''}${` · ${mb(cam.disk_free_bytes)} free`}</span>

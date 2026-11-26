@@ -632,7 +632,10 @@ class CameraService:
             raise CameraError("this camera cannot record video")
         if not arg.on:
             rec = b.stop_record("stopped")
-            return "recording stopped" if rec is not None else "not recording"
+            if rec is None:
+                return "not recording"
+            left = rec.queued
+            return f"recording stopped; writing {left} queued frames" if left else "recording stopped"
         if arg.duration_s < 0 or arg.max_frames < 0:
             raise CameraError("duration and frame limit must be >= 0")
         if not self._liveview:
@@ -713,6 +716,7 @@ class CameraService:
                     st.record_queued, st.record_pool = int(x["record_queued"]), int(x["record_pool"])
                     st.disk_free_bytes = int(x["disk_free_bytes"])
                     st.record_max_s, st.record_max_frames = float(x["record_max_s"]), int(x["record_max_frames"])
+                    st.record_stopping = bool(x.get("record_stopping", False))
             except Exception:  # noqa: BLE001 - status must not fail
                 pass
         return st

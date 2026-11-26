@@ -117,3 +117,10 @@ RGB. Frames wait in a RAM buffer (`cameras.zwo.record_buffer_mb`, allocated when
 starts) for the disk; when it is full, frames are dropped and counted rather than slowing the
 camera. Recording stops when free space falls below `cameras.zwo.record_min_free_mb`.
 `maxmount_svc.ser.read_ser()` reads the files back in Python.
+
+Disk speed limits long recordings. The Pi's SD card sustains about 34 MB/s
+(`dd ... conv=fdatasync`, 2026-11-26), about 110 fps of 640 × 480 RAW8 or 26 fps full frame.
+Linux's write cache and the RAM buffer absorb faster bursts: on the Pi, 20 s at 150 fps of
+640 × 480 and 10 s at 60 fps full frame (76 MB/s) recorded with no drops, the latter taking
+18 s more to finish writing (the GUI shows "Finishing…"). For long fast recordings, record to
+a USB 3 SSD (set `cameras.zwo.data_dir`).
