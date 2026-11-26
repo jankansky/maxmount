@@ -59,6 +59,7 @@ const profileTitle = (p) => p && [
   `${p.name}${p.camera ? ` · ${p.camera}` : ''}`,
   `${p.focal_mm} mm f/${p.f_ratio} · ${p.pixel_um} µm pixels · ${p.arcsec_per_px.toFixed(3)}″/px${p.fov_arcmin ? ` · field ${p.fov_arcmin.join('′ × ')}′` : ''}`,
   `diffraction λ/D ${p.diffraction_arcsec}″ (550 nm); pixel / Nyquist pixel: ${p.sampling_550} at 550 nm, ${p.sampling_685} at 685 nm (≤ 1 samples the diffraction limit)`,
+  p.color && 'colour (Bayer) sensor: each colour is sampled ~1.4× (green) to 2× (red, blue) more coarsely; beyond ~800 nm the filters pass alike, so an IR-pass filter gives full-resolution mono',
   p.note,
 ].filter(Boolean).join('\n');
 

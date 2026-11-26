@@ -25,7 +25,8 @@ Custom alt-az mount on an iOptron tri-pier, with elevation travel from −45° t
 | Computer | Raspberry Pi 4B with PREEMPT_RT kernel | One core isolated for the RT loop |
 | Telescope | Celestron C8, primary mirror to be locked, Starizona SCT Corrector IV (0.63× reducer/coma corrector) | External motorized focuser |
 | Widefield camera | The Imaging Source GigE | Through-axis Ethernet; acquisition and plate solving |
-| Narrow-field camera | ZWO USB3 behind the C8 | Through-axis USB; fast region-of-interest tracking |
+| Narrow-field camera | ZWO USB3 behind the C8: ASI224MC now (colour, 3.75 µm, 1304 × 976); a 2.9 µm mono sensor planned | Through-axis USB; fast region-of-interest tracking |
+| Stills camera | Nikon D500 (APS-C, 4.22 µm, 5568 × 3712, not astro-modified) | Deep-sky and satellite stills; gphoto2 control; no ROI streaming |
 | GNSS | u-blox M8 USB receiver (1546:01a8) | Location and backup time; add a PPS-capable module for timing |
 
 ## System architecture
@@ -147,26 +148,41 @@ be about 2p/λ for pixel size p: f/14 visible and f/11 IR for 3.76 µm, f/10.5 v
 A 20 cm aperture is well suited to lucky imaging: at r₀ = 5–10 cm a useful fraction of short
 frames is close to diffraction-limited.
 
-| Configuration | Focal length | Pixel scale | Pixel / Nyquist pixel (550 / 685 nm) | Field (sensor) |
+| Configuration | Focal length | Pixel scale | Pixel / Nyquist pixel (550 / 685 nm) | Field |
 | --- | --- | --- | --- | --- |
-| C8 + 0.63× Corrector IV, 3.76 µm (ASI533) | ~1350 mm, f/6.6 | 0.57″ | 2.06 / 1.65 | 29′ × 29′ |
-| C8 native f/10, 3.76 µm | 2032 mm | 0.38″ | 1.37 / 1.10 | 19′ × 19′ |
-| C8 + 1.5× Barlow, f/15, 3.76 µm | 3048 mm | 0.25″ | 0.91 / 0.73 | 13′ × 13′ |
-| C8 native f/10, 2.9 µm (ASI585-class) | 2032 mm | 0.29″ | 1.05 / 0.85 | 19′ × 11′ |
+| C8 + 0.63× Corrector IV + ASI224MC (3.75 µm) | ~1350 mm, f/6.6 | 0.57″ | 2.05 / 1.65 | 12.5′ × 9.3′ |
+| C8 native f/10 + ASI224MC | 2032 mm | 0.38″ | 1.36 / 1.09 | 8.3′ × 6.2′ |
+| C8 + 1.5× Barlow (f/15) + ASI224MC | 3048 mm | 0.25″ | 0.91 / 0.73 | 5.5′ × 4.1′ |
+| C8 + 0.63× Corrector IV + Nikon D500 (4.22 µm) | ~1350 mm, f/6.6 | 0.65″ | 2.31 / 1.85 | 60′ × 40′ |
+| C8 native f/10 + Nikon D500 | 2032 mm | 0.43″ | 1.53 / 1.23 | 40′ × 26′ |
+| C8 native f/10 + 2.9 µm mono (ASI585/462 class, not bought) | 2032 mm | 0.29″ | 1.05 / 0.85 | 19′ × 11′ (ASI585) |
+
+Both cameras in hand are colour (Bayer) sensors: green is sampled about 1.4× and red and blue
+2× more coarsely than the pixel grid, and debayering interpolates the rest. Beyond about
+800 nm the Bayer dyes pass light almost equally, so with an IR-pass filter (the usual
+lucky-imaging band anyway) the ASI224MC samples at its full pixel scale, like a mono camera.
+The IMX224 is sensitive in the near IR, has low read noise and fast ROI readout, which is why
+it is a common planetary camera.
 
 Conclusions:
 
-- **The corrector configuration is for deep sky and acquisition.** 0.57″ suits seeing-limited
-  imaging (a 2″ star spans ~3.5 px, fine for long-exposure deconvolution) and its 29′ field
-  makes LEO acquisition forgiving, but it is 2× coarser than Nyquist: diffraction-limited
-  detail (about 1.1 m on the ISS at 400 km) falls inside one pixel. Drizzling lucky-imaging
-  stacks recovers part of it, since tracking jitter dithers the frames.
+- **The corrector configuration is for deep sky and acquisition.** 0.57–0.65″ suits
+  seeing-limited imaging (a 2″ star spans ~3–3.5 px, fine for long-exposure deconvolution), but
+  it is 2× coarser than Nyquist: diffraction-limited detail (about 1.1 m on the ISS at 400 km)
+  falls inside one pixel. Drizzling lucky-imaging stacks recovers part of it, since tracking
+  jitter dithers the frames. With the D500 it gives a 60′ × 40′ field (the APS-C corners lie
+  just outside the corrector's 27 mm image circle and vignette).
 - **High-resolution work (planets, ISS and other large LEO targets) uses the native f/10 path
-  without the corrector.** With a 2.9 µm sensor (ASI585/ASI462 class) it is Nyquist-sampled at
-  f/10 with no Barlow: the full f/10 brightness, a 19′ × 11′ field, and the fast ROI readout
-  this project needs. The ASI533 at native f/10 is close in IR; a 1.5× Barlow (f/15) samples
-  visible light but is 5× dimmer than the corrector path and has a 13′ field, which needs the
-  camera loop to acquire LEO targets whose predictions are off by arcminutes.
+  without the corrector.** Now: the ASI224MC at f/10 with an IR-pass filter is close to
+  Nyquist (1.09 at 685 nm), or at f/15 with a 1.5× Barlow in colour. Its sensor is small, so
+  the field is only 8′ × 6′ at f/10 (5.5′ × 4′ at f/15): LEO targets, whose predictions are
+  often off by arcminutes, have to be acquired by the widefield camera and the camera loop.
+  Later: a 2.9 µm mono sensor (ASI585/462 class) is Nyquist-sampled at f/10 with no Barlow, with
+  the full f/10 brightness and a 19′ × 11′ field (ASI585), which makes acquisition much easier.
+- **The D500 is a stills camera here.** It cannot stream a region of interest at high rate
+  through an SDK, so it cannot close the tracking loop; it takes deep-sky frames through the
+  corrector and high-resolution satellite and lunar stills (burst) at f/10 while the ZWO or the
+  widefield camera holds the target. Not astro-modified: its IR-cut filter suppresses Hα.
 - **Costs of longer focal length:** smaller field (acquisition), less light per pixel (short
   lucky-imaging exposures on faint satellites), and a different back-focus stack (the corrector's
   90.3 mm budget does not apply without it).
@@ -325,9 +341,10 @@ the recording. Because the SER files are standard, any stage can also be done in
 On an alt-az mount the field turns during an exposure at
 ω = ω⊕ · cos(latitude) · cos(az) / cos(el). At 40° latitude: 0 due east or west, 0.0042 °/s
 (15°/h) on the meridian at 40° elevation, 0.0064 °/s at 60°, 0.037 °/s at 85°. With a C8 at f/10
-and an ASI533-class sensor (3.76 µm pixels, 8 mm centre to corner), one pixel of smear at the
-corner is 0.027°. Without a rotator, sub-exposures near the meridian are therefore limited to a
-few seconds. That makes a rotator a requirement for deep-sky imaging, not an option.
+and the Nikon D500 (4.22 µm pixels, 14 mm centre to corner), one pixel of smear at the corner
+is 0.017°: about 4 s on the meridian at 40° elevation. The ASI224MC's small sensor (3 mm centre
+to corner) tolerates 0.07°, about 17 s. Without a rotator, deep-sky sub-exposures near the
+meridian are therefore limited to a few seconds. That makes a rotator a requirement for deep-sky imaging, not an option.
 
 Requirements: continuous, smooth motion during the exposure with 0.01–0.02° tracking error; up
 to ~0.04 °/s (long exposures within ~5° of the zenith stay impractical); continuous rotation or
@@ -459,8 +476,9 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 
 - [x] iPOS4808 BX-CAT firmware supports CSP (0x6502 bit 7). It has no 0x60B1/0x60B2, so CSP runs without feedforward. Each PDO holds at most 64 bits.
 - [ ] Choose the field rotator: third EtherCAT axis or commercial USB rotator.
-- [ ] Choose the ZWO camera for high-rate ROI capture and check its frame rate at the planned ROI and bit depth; size the recording SSD. A 2.9 µm sensor (ASI585/ASI462 class) Nyquist-samples the C8 at native f/10 (see [Sampling and imaging profiles](#sampling-and-imaging-profiles)); the ASI533 needs a 1.5× Barlow for the same in visible light.
-- [ ] Measure the chosen ZWO camera's photon transfer curve (read noise, e⁻/ADU, full well against gain, HCG switch point) for automatic exposure and gain (the characterisation feature does this).
+- [ ] Measure the ASI224MC's frame rate at the planned ROI and bit depth over the through-axis USB, and size the recording SSD. Decide on a 2.9 µm mono sensor (ASI585/ASI462 class), which Nyquist-samples the C8 at native f/10 with a larger field (see [Sampling and imaging profiles](#sampling-and-imaging-profiles)).
+- [ ] Nikon D500 control: gphoto2 capture and download, and whether its back focus with a T-ring fits the corrector's 90.3 mm.
+- [ ] Measure the ASI224MC's photon transfer curve (read noise, e⁻/ADU, full well against gain, HCG switch point) for automatic exposure and gain (the characterisation feature does this).
 - [ ] Light-tight cover: near term, calibration frames are collected with manual steps (the GUI prompts to cap or uncap and checks darks for light leaks); long term, add a motorised cap and a flat panel (or a flip-flat that does both) with ASCOM/INDI drivers for unattended collection.
 - [ ] Confirm the iPOS accepts the ADRT sin/cos signal directly; record the encoder line count.
 - [ ] Check REE2000 max output frequency and drive encoder input bandwidth against worst-case elevation rate.
