@@ -328,9 +328,11 @@ def test_aircraft_tab(gui_url, monkeypatch, served, tmp_path):  # noqa: F811
     assert not errors, errors
 
 
-def test_dslr_panel(gui_url, served, tmp_path):  # noqa: F811
+@pytest.mark.parametrize("engine", ["chromium", "firefox"])
+def test_dslr_panel(gui_url, served, tmp_path, engine):  # noqa: F811
     """The Track screen's stills-camera panel with the simulated camera: live view, a setting,
-    capture, and the last capture with its histogram."""
+    capture, and the last capture with its histogram; the image stays inside its box (Firefox
+    once let it overflow)."""
     from maxmount_svc import camera
     from maxmount_svc.mount import MountClient
 
@@ -342,19 +344,24 @@ def test_dslr_panel(gui_url, served, tmp_path):  # noqa: F811
     try:
         with playwright.sync_playwright() as pw:
             try:
-                browser = pw.chromium.launch()
+                browser = getattr(pw, engine).launch()
             except Exception as e:  # noqa: BLE001
-                pytest.skip(f"no Chromium for Playwright: {e}")
+                pytest.skip(f"no {engine} for Playwright: {e}")
             page = browser.new_page(viewport={"width": 1440, "height": 1000})
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
             page.goto(gui_url)
             panel = page.locator("[aria-label='Stills camera']")
+
+            def image_fits():
+                box, img = panel.locator(".camview").bounding_box(), panel.locator(".camview img").bounding_box()
+                assert img["width"] <= box["width"] + 1 and img["height"] <= box["height"] + 1, (box, img)
             panel.get_by_role("button", name="Live view").wait_for(timeout=15000)
             page.wait_for_function("() => !document.querySelector(\"[aria-label='Stills camera'] button\").disabled", timeout=15000)
             panel.get_by_role("button", name="Live view").click()
             panel.locator("img[alt='live view']").wait_for(timeout=10000)
             assert "LIVE" in panel.locator(".tag").text_content()
+            image_fits()
             panel.locator(".camview").click()  # zoom for focus
             assert "3×" in panel.locator(".tag").text_content()
             panel.locator(".camview").click()
@@ -364,6 +371,7 @@ def test_dslr_panel(gui_url, served, tmp_path):  # noqa: F811
             panel.get_by_role("button", name="Capture").click()
             panel.locator("img[alt='last capture']").wait_for(timeout=15000)
             assert "ISO 400" in panel.locator(".tag").text_content()
+            image_fits()
             page.wait_for_function("() => document.querySelector(\"[aria-label='Stills camera'] .dslr-info\").textContent.includes('capture 1')", timeout=10000)
             assert "median" in panel.locator(".dslr-info").text_content()
             browser.close()

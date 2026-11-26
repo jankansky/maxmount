@@ -919,6 +919,14 @@ class Gateway:
 
     def make_app(self) -> web.Application:
         app = web.Application()
+
+        async def no_stale_files(_request, response):
+            # Browsers otherwise cache the GUI's modules heuristically and can mix old and new
+            # versions after an update (an import fails and the page stays blank). no-cache
+            # still allows cheap revalidation (ETag / 304).
+            response.headers.setdefault("Cache-Control", "no-cache")
+
+        app.on_response_prepare.append(no_stale_files)
         app.router.add_get("/", self._index)
         app.router.add_get("/ws", self._ws)
         app.router.add_static("/", self.static_dir, show_index=False)

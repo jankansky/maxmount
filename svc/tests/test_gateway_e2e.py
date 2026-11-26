@@ -55,7 +55,7 @@ def test_gateway_serves_the_gui_and_bridges_requests(stack):
                 async with http.get(f"http://127.0.0.1:{port}/") as r:
                     assert r.status == 200 and "maxmount" in await r.text()
                 async with http.get(f"http://127.0.0.1:{port}/app.js") as r:
-                    assert r.status == 200
+                    assert r.status == 200 and r.headers["Cache-Control"] == "no-cache"  # no stale modules
                 async with http.get(f"http://127.0.0.1:{port}/vendor/ne_110m_land.json") as r:
                     assert r.status == 200
                 async with http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
