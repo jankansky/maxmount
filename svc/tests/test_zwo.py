@@ -304,6 +304,7 @@ def test_roi_tracking_follows_the_simulated_target(tmp_path):
 def test_roi_tracking_pick(tmp_path):
     """Picking a point acquires the object there, not the brightest."""
     b = zwo.ZwoSimBackend()
+    b.drift = (0.0, 0.0)  # the target stays within ~30 px of the centre, away from the star
     b.open()
     try:
         b.set("roi", "full")
@@ -314,8 +315,8 @@ def test_roi_tracking_pick(tmp_path):
         from maxmount_svc.roitrack import measure
         tx, ty = b.target_xy()
         # A star well away from the target, as the pick.
-        d = measure(frame, near=(tx + 300 if tx < 652 else tx - 300, 488), gate=200, snr_min=5)
-        assert d is not None and abs(d.x - tx) > 50
+        d = measure(frame, near=(tx - 400, 488), gate=200, snr_min=5)
+        assert d is not None and abs(d.x - tx) > 150
         b.set_roi_track(True, pick=(d.x / 1304, d.y / 976))
         time.sleep(0.5)
         st = b.extra_status()

@@ -2,15 +2,16 @@
 """ROI tracking: find the target in each video frame and steer the camera's region of interest
 (ROI) so that the target stays centred while it moves across the sensor.
 
-Detection (measure): the frame is summed in blocks (an even block size, so a Bayer mosaic's
-colours average out), smoothed by a 3 x 3 box, and the brightest peak above the background
-(median) by snr_min times the noise (MAD) is the target. Block sums favour an extended,
+Detection (measure): the frame is summed in blocks (about 80 across; blocks of 8 px or more
+sample one Bayer colour, so a full frame costs a few ms on the Pi), smoothed by a 3 x 3 box,
+and the brightest peak above the background (median) by snr_min times the noise (MAD) is the
+target. Block sums favour an extended,
 bright satellite over a star of similar peak brightness. Once locked, the search is gated
 around the predicted position (a few percent of the ROI, plus the motion since the last frame
 and the target's size), so a brighter object elsewhere does not steal the lock. A pick (a
 click on the image) searches the same small radius around the point. The
-centroid is the flux-weighted mean over the window around the peak that holds the target's
-light (grown until its edges are background).
+centroid is the flux-weighted mean, at 2 x 2 pixel resolution, over the window around the
+peak that holds the target's light (grown until its edges are background).
 
 Control (RoiTracker): an alpha-beta filter on the target's sensor position gives position
 and velocity. The ROI centre is placed on the predicted position one latency ahead. The ROI
@@ -46,10 +47,24 @@ def _box3(s: np.ndarray) -> np.ndarray:
     return out
 
 
-def block_size(width: int, height: int, target: int = 160) -> int:
-    """An even block size giving a reduced image about `target` blocks across."""
-    b = max(2, int(max(width, height) / target))
-    return b + (b % 2)
+def block_size(width: int, height: int, target: int = 80) -> int:
+    """A power-of-two block size (at least 2) giving a reduced image about `target` blocks across."""
+    b = 2
+    while max(width, height) / b > target * 1.5:
+        b *= 2
+    return b
+
+
+def _block_sums(a: np.ndarray, bs: int, hb: int, wb: int) -> tuple[np.ndarray, int]:
+    """Block sums, with blocks of 8 px or more decimated by an even step (one Bayer colour; on
+    the Pi this keeps a full frame to a few ms). Returns the sums and pixels per block."""
+    d = bs // 4 if bs >= 8 else 1
+    n = bs // d
+    acc = np.zeros((hb, wb), np.float32)
+    for i in range(n):
+        for j in range(n):
+            acc += a[i * d:hb * bs:bs, j * d:wb * bs:bs]
+    return acc, n * n
 
 
 def measure(frame: np.ndarray, near: tuple[float, float] | None = None, gate: float | None = None,
@@ -57,16 +72,18 @@ def measure(frame: np.ndarray, near: tuple[float, float] | None = None, gate: fl
     """The target in one frame (H x W raw or mono, or H x W x 3), searched within `gate`
     frame pixels of `near` (frame pixels) or over the whole frame; None if nothing stands
     out by snr_min."""
-    a = frame if frame.ndim == 2 else frame.sum(axis=2)
+    a = frame if frame.ndim == 2 else frame[..., 1]
     h, w = a.shape
     bs = block or block_size(w, h)
     hb, wb = h // bs, w // bs
     if hb < 3 or wb < 3:
         return None
-    s = a[:hb * bs, :wb * bs].reshape(hb, bs, wb, bs).sum(axis=(1, 3), dtype=np.float32)
+    s, npx = _block_sums(a, bs, hb, wb)
+    st = s[::2, ::2] if s.size > 4096 else s
+    bg = float(np.median(st))
+    noise = 1.4826 * float(np.median(np.abs(st - bg))) + 1e-3
     s3 = _box3(s)
-    bg3 = float(np.median(s3))
-    noise3 = 1.4826 * float(np.median(np.abs(s3 - bg3))) + 1e-3
+    bg3, noise3 = 9 * bg, 3 * noise  # a 3 x 3 sum of independent blocks
     y0, y1, x0, x1 = 0, hb, 0, wb
     if near is not None and gate is not None:
         cx, cy, r = (near[0] + 0.5) / bs, (near[1] + 0.5) / bs, gate / bs + 1
@@ -81,25 +98,31 @@ def measure(frame: np.ndarray, near: tuple[float, float] | None = None, gate: fl
     if snr < snr_min:
         return None
     # The target's window: grow until its border is background.
-    bg = float(np.median(s))
-    noise = 1.4826 * float(np.median(np.abs(s - bg))) + 1e-3
     thr = bg + 3 * noise
-    r = 2
+    r = 1
     while True:
         wy0, wy1, wx0, wx1 = max(py - r, 0), min(py + r + 1, hb), max(px - r, 0), min(px + r + 1, wb)
         win = s[wy0:wy1, wx0:wx1]
         edge = max(win[0].max(), win[-1].max(), win[:, 0].max(), win[:, -1].max())
         if edge < thr or r >= 40 or (wy0 == 0 and wx0 == 0 and wy1 == hb and wx1 == wb):
             break
-        r += 2
-    wts = np.clip(win - thr, 0, None)
+        r += 1
+    # Centroid at 2 x 2 resolution (a whole Bayer cell) within the window: sub-pixel whatever
+    # the block size.
+    Y0, X0 = wy0 * bs, wx0 * bs
+    fw = a[Y0:wy1 * bs, X0:wx1 * bs]
+    m, n = fw.shape[0] // 2, fw.shape[1] // 2
+    q = fw[:2 * m, :2 * n].reshape(m, 2, n, 2).sum(axis=(1, 3), dtype=np.float32)
+    bg_px, sd_px = bg / npx, noise / math.sqrt(npx)
+    wts = np.clip(q - 4 * bg_px - 3 * 2 * sd_px, 0, None)
     tot = float(wts.sum())
     if tot <= 0:
         return None
-    yy, xx = np.mgrid[wy0:wy1, wx0:wx1]
-    cyb, cxb = float((wts * yy).sum() / tot), float((wts * xx).sum() / tot)
-    return Detection(x=(cxb + 0.5) * bs - 0.5, y=(cyb + 0.5) * bs - 0.5, flux=float(np.clip(win - bg, 0, None).sum()),
-                     snr=snr, size_px=int((wts > 0).sum()) * bs * bs)
+    yy = np.arange(m, dtype=np.float32)[:, None]
+    xx = np.arange(n, dtype=np.float32)[None, :]
+    cy, cx = float((wts * yy).sum() / tot), float((wts * xx).sum() / tot)
+    return Detection(x=X0 + 2 * cx + 0.5, y=Y0 + 2 * cy + 0.5, flux=float(np.clip(q - 4 * bg_px, 0, None).sum()),
+                     snr=snr, size_px=int((wts > 0).sum()) * 4)
 
 
 class RoiTracker:
