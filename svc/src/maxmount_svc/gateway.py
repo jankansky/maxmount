@@ -137,8 +137,10 @@ class TleCache:
                 path.write_text(data)
                 note = "downloaded"
             except OSError as e:
+                # CelesTrak answers 403 with an explanation (e.g. one download per 2 h update).
+                why = e.read().decode("utf-8", "replace").strip().replace("\n", " ")[:200] if hasattr(e, "read") else ""
                 if not path.exists():
-                    raise RuntimeError(f"cannot fetch TLE group '{group}': {e}") from None
+                    raise RuntimeError(f"cannot fetch TLE group '{group}': {e}{': ' + why if why else ''}") from None
                 log.warning("TLE download failed (%s); using the cached copy", e)
         lines = [ln.rstrip() for ln in path.read_text().splitlines() if ln.strip()]
         sats: dict[str, tuple[str, str]] = {}
