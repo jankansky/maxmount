@@ -178,7 +178,14 @@ def test_pass_preview(gui_url, monkeypatch):
         rows.nth(1).click()  # again: clears
         page.wait_for_selector("[aria-label='Pass details'] table.kv", state="detached", timeout=5000)
         # Changing a selector searches again by itself; 'all in group' hides the watch list.
+        sizes = page.locator("[aria-label=Passes]").get_by_label("Size").locator("option").all_text_contents()
+        assert sizes[0] == "any" and "px" in sizes[1]
         calls = len(seen)
+        page.locator("[aria-label=Passes]").get_by_label("Size").select_option("20")
+        page.wait_for_timeout(1500)
+        assert seen[-1]["min_size_arcsec"] == 20
+        page.locator("[aria-label=Passes]").get_by_label("Size").select_option("any")
+        page.wait_for_timeout(1000)
         page.get_by_label("Max el ≥").select_option("30")
         page.wait_for_timeout(1500)
         assert len(seen) > calls and seen[-1]["min_max_el_deg"] == 30

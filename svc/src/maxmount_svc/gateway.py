@@ -355,6 +355,7 @@ class Gateway:
             "tracking": {"horizon_min_el_deg": s.tracking.horizon_min_el_deg, "sun_min_sep_deg": s.tracking.sun_min_sep_deg},
             "park": {"az_deg": self.park[0], "el_deg": self.park[1]},
             "max_clock_error_us": s.max_clock_error_us,
+            "narrow_arcsec_per_px": round(s.imaging.narrow_arcsec_per_px, 4),
             "tle_groups": list(TLE_GROUPS),
             "axes": s.axes_info,
             "fieldbus": {k: s.fieldbus.get(k) for k in ("backend", "interface", "cycle_us")},
@@ -462,6 +463,8 @@ class Gateway:
         min_max_el_deg: keep passes that culminate at least this high.
         start_ns: search from this time instead of now (tests; planning ahead).
         max_mag: keep passes predicted brighter than this (unknown magnitudes are dropped).
+        min_size_arcsec: keep passes whose largest angular size (largest dimension over the
+            closest range) is at least this (unknown sizes are dropped).
         lighting: "any" (default), "sunlit" (the satellite is sunlit for part of the pass) or
             "dark_sky" (sunlit, with the Sun below -6 deg at the site at culmination).
         Each row gets sunlit_frac (0..1) and sun_el_deg (at culmination).
@@ -521,6 +524,11 @@ class Gateway:
         if max_mag not in (None, "", "any"):
             no_mag = sum(r["peak_mag"] is None for r in rows)
             rows = [r for r in rows if r["peak_mag"] is not None and r["peak_mag"] <= float(max_mag)]
+        min_size = args.get("min_size_arcsec")
+        no_size = 0
+        if min_size not in (None, "", "any", 0):
+            no_size = sum(r["ang_size_arcsec"] is None for r in rows)
+            rows = [r for r in rows if r["ang_size_arcsec"] is not None and r["ang_size_arcsec"] >= float(min_size)]
         rows = _merge_docked(rows)
         rows.sort(key=lambda r: int(r["rise_ns"]))
         shown = rows[:PASS_ROWS_MAX]
@@ -534,6 +542,8 @@ class Gateway:
         msg += f"; TLEs {note}"
         if max_mag not in (None, "", "any"):
             msg += f"; brighter than mag {float(max_mag):g}" + (f" ({no_mag} without a magnitude hidden)" if no_mag else "")
+        if min_size not in (None, "", "any", 0):
+            msg += f"; at least {float(min_size):g}\" across" + (f" ({no_size} without a size hidden)" if no_size else "")
         msg += f"; {self.satcat.note}"
         if bad:
             msg += f"; {bad} element sets failed (decayed?)"

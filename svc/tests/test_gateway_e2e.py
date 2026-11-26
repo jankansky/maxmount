@@ -61,6 +61,7 @@ def test_gateway_serves_the_gui_and_bridges_requests(stack):
                 async with http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
                     hello = await _recv_until(ws, lambda m: m["type"] == "hello")
                     assert hello["limits"]["el"]["max_deg"] == 180
+                    assert hello["narrow_arcsec_per_px"] == pytest.approx(206.265 * 3.76 / 1350, abs=1e-3)  # default camera
                     tel = await _recv_until(ws, lambda m: m["type"] == "telemetry")
                     assert {a["axis"] for a in tel["axes"]} == {"az", "el"}
                     assert "ra_h" in tel["sky"] and "lst_h" in tel["sky"]  # computed by the gateway
@@ -304,6 +305,12 @@ def test_passes_all_in_group_and_plan_on_demand(stack):
                         assert -5 < x["peak_mag"] < 4 and int(x["rise_ns"]) <= int(x["peak_mag_ns"]) <= int(x["set_ns"])
                     else:
                         assert x["peak_mag"] is None
+                # Angular size filter (ISS: 109 m, so 20-80" at these ranges).
+                big = await req(10, "passes", {**base, "min_size_arcsec": 30})
+                assert big["ok"] and all(x["ang_size_arcsec"] >= 30 for x in big["data"]["passes"])
+                assert len(big["data"]["passes"]) == sum(x["ang_size_arcsec"] >= 30 for x in rows) and 'at least 30"' in big["message"]
+                none = await req(11, "passes", {**base, "min_size_arcsec": 1000})
+                assert none["ok"] and none["data"]["passes"] == []
                 bright = await req(9, "passes", {**base, "max_mag": 0})
                 assert bright["ok"] and all(x["peak_mag"] <= 0 for x in bright["data"]["passes"])
                 # Lighting: every row says how much of the pass is sunlit and where the Sun is.

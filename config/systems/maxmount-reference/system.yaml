@@ -51,6 +51,13 @@ tracking:
   point_rate_hz: 20
   lookahead_s: 5
 
+# Narrow-field imaging camera (ZWO behind the C8 with the 0.63x SCT Corrector IV). Used for the
+# Passes screen's angular-size filter (shown in pixels). focal_mm: 1260-1450 mm depending on
+# spacing; replace with the plate-solved value.
+imaging:
+  narrow_pixel_um: 3.76
+  narrow_focal_mm: 1350
+
 # ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
 # 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.
 adsb:

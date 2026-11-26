@@ -68,6 +68,18 @@ class AdsbSettings:
 
 
 @dataclass
+class ImagingSettings:
+    # Narrow-field camera (ZWO behind the C8): sets the GUI's angular-size filter in pixels.
+    # Replace focal_mm with the plate-solved value once known.
+    narrow_pixel_um: float = 3.76
+    narrow_focal_mm: float = 1350.0
+
+    @property
+    def narrow_arcsec_per_px(self) -> float:
+        return 206.265 * self.narrow_pixel_um / self.narrow_focal_mm
+
+
+@dataclass
 class SystemSettings:
     name: str
     backend: str
@@ -83,6 +95,7 @@ class SystemSettings:
     axes_info: list[dict] = field(default_factory=list)
     fieldbus: dict = field(default_factory=dict)
     adsb: AdsbSettings = field(default_factory=AdsbSettings)
+    imaging: ImagingSettings = field(default_factory=ImagingSettings)
 
 
 class ConfigError(RuntimeError):
@@ -199,6 +212,8 @@ def load_system(path: str | Path) -> SystemSettings:
         pointing_file=pointing_file,
         axes_info=_axes_info(doc, path.resolve().parent.parent.parent / "drives"),
         fieldbus=dict(doc.get("fieldbus") or {}),
+        imaging=ImagingSettings(**{k: float(v) for k, v in (doc.get("imaging") or {}).items()
+                                   if k in ImagingSettings.__dataclass_fields__}),
         adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
                              for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),
     )

@@ -38,6 +38,9 @@ const NUDGE_OPTS = [[10, '10″'], [60, '1′'], [600, '10′']];
 const OBJECT_OPTS = [['watch', 'watch list'], ['all', 'all in group']];
 const HOURS_OPTS = [6, 12, 24, 48].map((h) => [h, `${h} h`]);
 const MINEL_OPTS = [0, 20, 30, 45, 60].map((d) => [d, `${d}°`]);
+// Angular-size filter: steps for the narrow-field camera, labelled in its pixels.
+const SIZE_STEPS = [5, 10, 20, 40];
+const sizeOpts = (asp) => [['any', 'any'], ...SIZE_STEPS.map((a) => [a, `≥ ${a}″${asp ? ` (~${Math.round(a / asp)} px)` : ''}`])];
 const MAG_OPTS = [['any', 'any'], ...[0, 1, 2, 3, 4, 5, 6].map((m) => [m, `≤ ${m}`])];
 // Row fields computed by the gateway's pass search; kept when a row is planned on selection.
 const SEEN_KEYS = ['sunlit_frac', 'sun_el_deg', 'peak_mag', 'peak_mag_ns', 'mag_estimated', 'std_mag', 'size_m',
@@ -283,24 +286,26 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
   const [minEl, setMinEl] = useState(loadPref('minmaxel', 0));     // hide passes culminating lower than this
   const [lighting, setLighting] = useState(loadPref('lighting', 'any'));
   const [maxMag, setMaxMag] = useState(loadPref('maxmag', 'any'));
+  const [minSize, setMinSize] = useState(loadPref('minsize', 'any'));
+  const asp = hello?.narrow_arcsec_per_px;
   const [rows, setRows] = useState([]);
   const [groupNames, setGroupNames] = useState([]);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
   const refresh = async () => {
-    savePref('group', group); savePref('watch', names); savePref('hours', hours); savePref('allgroup', all); savePref('minmaxel', minEl); savePref('lighting', lighting); savePref('maxmag', maxMag);
+    savePref('group', group); savePref('watch', names); savePref('hours', hours); savePref('allgroup', all); savePref('minmaxel', minEl); savePref('lighting', lighting); savePref('maxmag', maxMag); savePref('minsize', minSize);
     const id = ++seq.current;
     setBusy(true); setNote(all ? `searching every object in '${group}'…` : 'computing passes…');
     const r = await send('passes', { group, all, names: names.split(',').map((s) => s.trim()).filter(Boolean),
-      hours: Number(hours), min_max_el_deg: Number(minEl), lighting, max_mag: maxMag });
+      hours: Number(hours), min_max_el_deg: Number(minEl), lighting, max_mag: maxMag, min_size_arcsec: minSize });
     if (id !== seq.current) return; // a newer search was started
     setBusy(false); setNote(r.message);
     setRows(r.ok ? r.data.passes : []);
     if (r.ok) setGroupNames(r.data.names || []);
   };
   // Search again whenever a selector changes (the watch list: on Enter or Refresh).
-  useEffect(() => { if (connected) refresh(); }, [connected, group, all, hours, minEl, lighting, maxMag]);
+  useEffect(() => { if (connected) refresh(); }, [connected, group, all, hours, minEl, lighting, maxMag, minSize]);
   const nameOpts = useMemo(() => groupNames.map((n) => html`<option value=${n} />`), [groupNames]);
   const addName = (n) => {
     const list = names.split(',').map((x) => x.trim()).filter(Boolean);
@@ -336,6 +341,8 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
         title="sunlit: the satellite is in sunlight for part of the pass; dark sky: and the Sun is below −6° at culmination" /></label>
       <label>Mag <${Select} value=${maxMag} onChange=${setMaxMag} options=${MAG_OPTS}
         title="keep passes predicted at least this bright (passes without a magnitude are hidden)" /></label>
+      <label>Size <${Select} value=${minSize} onChange=${setMinSize} options=${sizeOpts(asp)}
+        title=${`largest angular size at the closest point, at least this (passes without a size are hidden)${asp ? `; ZWO ${asp.toFixed(2)}″/px, seeing usually 1.5–3″` : ''}`} /></label>
       <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
     </div>
     ${!all && html`<div class="toolbar">
@@ -375,7 +382,7 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
             <td title=${p.sun_el_deg != null ? `Sun ${Number(p.sun_el_deg).toFixed(0)}° at max el` : ''}
               class=${p.sun_el_deg != null && p.sun_el_deg > -6 ? 'muted' : ''}>${p.sunlit_frac == null ? '?' : p.sunlit_frac > 0 ? `${Math.round(p.sunlit_frac * 100)}%${p.sun_el_deg > -6 ? ' ☀' : ''}` : '—'}</td>
             <td title=${p.std_mag != null ? `standard mag ${p.std_mag}${p.mag_estimated ? ' (from radar size)' : ''}` : 'no magnitude data'}>${fmtMag(p) ?? '—'}</td>
-            <td title=${p.size_m ? `${p.size_m.join(' × ')} m at ${Math.round(p.min_range_km)} km` : 'no size data'}>${fmtSize(p) ?? '—'}</td>
+            <td title=${p.size_m ? `${p.size_m.join(' × ')} m at ${Math.round(p.min_range_km)} km${hello?.narrow_arcsec_per_px ? ` · ~${Math.round(p.ang_size_arcsec / hello.narrow_arcsec_per_px)} px on the ZWO` : ''}` : 'no size data'}>${fmtSize(p) ?? '—'}</td>
             <td>${plan}</td>
             <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${p.planned !== false && !chosen.mode} onClick=${(e) => { e.stopPropagation(); track(p); }}>Track</button>`}</td>
           </tr>`;
@@ -687,7 +694,7 @@ function ConjDetail({ preview, clearPreview }) {
   </section>`;
 }
 
-function PassDetail({ preview, status, clearPreview, air }) {
+function PassDetail({ preview, status, clearPreview, air, asp }) {
   if (air) return html`<${AircraftDetail} air=${air} />`;
   if (preview?.kind === 'conj') return html`<${ConjDetail} preview=${preview} clearPreview=${clearPreview} />`;
   if (!preview) {
@@ -710,7 +717,7 @@ function PassDetail({ preview, status, clearPreview, air }) {
       ${row('Lighting', preview.sunlit)}
       ${row('Brightness', p.peak_mag != null ? `mag ${fmtMag(p)} at ${utc(p.peak_mag_ns)} (standard ${p.std_mag}${p.mag_estimated ? ', from radar size' : ''})`
         : p.std_mag != null ? 'not sunlit' : 'no magnitude data (add it to config/satellites.yaml)')}
-      ${row('Size', p.size_m ? `${p.size_m.join(' × ')} m${p.size_estimated ? ' (from radar size)' : ''} · up to ${fmtAng(p.ang_size_arcsec)} at ${Math.round(p.min_range_km)} km`
+      ${row('Size', p.size_m ? `${p.size_m.join(' × ')} m${p.size_estimated ? ' (from radar size)' : ''} · up to ${fmtAng(p.ang_size_arcsec)} at ${Math.round(p.min_range_km)} km${asp ? ` (~${Math.round(p.ang_size_arcsec / asp)} px)` : ''}`
         : p.min_range_km != null ? `no size data · closest ${Math.round(p.min_range_km)} km` : '—')}
       ${row('Plan', p.planned === false ? 'planning…' : ch.mode ? `${ch.mode}${ch.mode === 'over_the_top' ? ` (error ${Number(ch.max_error_deg).toFixed(1)}°)` : ''}` : 'no plan fits')}
       ${ch.mode && row('Peak rates', `az ${Number(ch.peak_az_deg_s).toFixed(2)} °/s · el ${Number(ch.peak_el_deg_s).toFixed(2)} °/s`)}
@@ -894,7 +901,8 @@ function App() {
           <${Aircraft} ask=${ask} send=${send} status=${status} connected=${connected} active=${screen === 'passes' && listTab === 'air'}
             setAirView=${setAirView} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} mask=${hello?.tracking?.horizon_min_el_deg ?? 10} />
         </div>
-        <${PassDetail} preview=${preview} status=${status} clearPreview=${() => setPreview(null)} air=${listTab === 'air' ? airView : null} />
+        <${PassDetail} preview=${preview} status=${status} clearPreview=${() => setPreview(null)} air=${listTab === 'air' ? airView : null}
+          asp=${hello?.narrow_arcsec_per_px} />
       </div>
     </div>
     <div class="layout" hidden=${screen !== 'track'}>
