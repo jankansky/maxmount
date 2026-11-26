@@ -19,6 +19,7 @@ WebSocket messages (JSON):
           pass_preview {name, line1, line2, rise_ns, culmination_ns, set_ns} (ground track + sky path),
           conjunctions {hours, max_range_km, lighting, max_mag, coorbiting} (SOCRATES, visible from the site),
           aircraft {max_range_km, show, selected} (local ADS-B receiver: list, map, sky, the selected one's path),
+          set_imaging {profile} (the active narrow-field imaging profile; broadcast as {"type": "imaging"}),
           conjunction_detail {cat1, cat2, primary, tca_ns} (both paths, separation, the pass to track),
           enable/disable {axis} and fault_reset (straight to mount-rt),
           jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
@@ -152,6 +153,38 @@ class TleCache:
         return sats, f"{note}, {age_h:.1f} h old"
 
 
+class ImagingState:
+    """The active imaging profile, chosen in the GUI and remembered across restarts in
+    $XDG_STATE_HOME/maxmount/<system>-imaging.json (default ~/.local/state)."""
+
+    def __init__(self, settings: SystemSettings, state_dir: Path | None = None):
+        self.settings = settings
+        base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+        self.path = (state_dir or base / "maxmount") / f"{settings.name}-imaging.json"
+        self.key = settings.imaging.default
+        try:
+            saved = json.loads(self.path.read_text()).get("active")
+            if saved in settings.imaging.profiles:
+                self.key = saved
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    @property
+    def active(self):
+        return self.settings.imaging.profiles[self.key]
+
+    def set(self, key: str) -> None:
+        if key not in self.settings.imaging.profiles:
+            raise ValueError(f"unknown imaging profile '{key}'")
+        self.key = key
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"active": key}))
+
+    def message(self) -> dict:
+        return {"type": "imaging", "active": self.key,
+                "profiles": [p.summary() for p in self.settings.imaging.profiles.values()]}
+
+
 class Gateway:
     def __init__(self, settings: SystemSettings, host: str = "0.0.0.0", port: int = 8080, static_dir: Path = STATIC_DIR,
                  park_az_deg: float = 0.0, park_el_deg: float = 45.0):
@@ -160,6 +193,7 @@ class Gateway:
         self.static_dir = Path(static_dir)
         self.park = (park_az_deg, park_el_deg)
         self.tles = TleCache()
+        self.imaging = ImagingState(settings)
         self.satcat = satcat.SatCatalog()
         self.socrates = socrates.Socrates()
         self.adsb = adsb.AdsbSource(settings.adsb.source)
@@ -355,7 +389,7 @@ class Gateway:
             "tracking": {"horizon_min_el_deg": s.tracking.horizon_min_el_deg, "sun_min_sep_deg": s.tracking.sun_min_sep_deg},
             "park": {"az_deg": self.park[0], "el_deg": self.park[1]},
             "max_clock_error_us": s.max_clock_error_us,
-            "narrow_arcsec_per_px": round(s.imaging.narrow_arcsec_per_px, 4),
+            "imaging": self.imaging.message(),
             "tle_groups": list(TLE_GROUPS),
             "axes": s.axes_info,
             "fieldbus": {k: s.fieldbus.get(k) for k in ("backend", "interface", "cycle_us")},
@@ -441,6 +475,12 @@ class Gateway:
             return True, f"{len(sats)} objects ({note})", {"names": sorted(sats)}
         if op == "passes":
             return self._passes(args)
+        if op == "set_imaging":
+            self.imaging.set(str(args.get("profile", "")))
+            msg = self.imaging.message()
+            self.loop.call_soon_threadsafe(self._broadcast, msg)  # every open GUI follows (_do runs in a worker thread)
+            p = self.imaging.active
+            return True, f"imaging profile: {p.name} ({p.arcsec_per_px:.2f}\"/px)", msg
         if op == "aircraft":
             return self._aircraft(args)
         if op == "conjunctions":

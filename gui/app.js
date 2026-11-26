@@ -53,7 +53,27 @@ const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives']]
 const screenFromHash = () => { const h = location.hash.slice(1); return SCREENS.some(([id]) => id === h) ? h : 'track'; };
 const LATER = ['Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
 
-function Header({ theme, setTheme, line, status, tel, hello, connected, screen, setScreen }) {
+// The active narrow-field imaging profile (system file `imaging:`), from hello / 'imaging' messages.
+const activeProfile = (im) => im?.profiles?.find((p) => p.key === im.active) || null;
+const profileTitle = (p) => p && [
+  `${p.name}${p.camera ? ` · ${p.camera}` : ''}`,
+  `${p.focal_mm} mm f/${p.f_ratio} · ${p.pixel_um} µm pixels · ${p.arcsec_per_px.toFixed(3)}″/px${p.fov_arcmin ? ` · field ${p.fov_arcmin.join('′ × ')}′` : ''}`,
+  `diffraction λ/D ${p.diffraction_arcsec}″ (550 nm); pixel / Nyquist pixel: ${p.sampling_550} at 550 nm, ${p.sampling_685} at 685 nm (≤ 1 samples the diffraction limit)`,
+  p.note,
+].filter(Boolean).join('\n');
+
+function ImagingPicker({ imaging, send }) {
+  const p = activeProfile(imaging);
+  if (!p) return null;
+  const opts = imaging.profiles.map((x) => [x.key, `${x.name} · ${x.arcsec_per_px.toFixed(2)}″/px`]);
+  return html`<label class="imaging" title=${profileTitle(p)}>
+    <span class="small">Imaging</span>
+    <${Select} aria-label="Imaging profile" value=${imaging.active} options=${opts} onChange=${(k) => send('set_imaging', { profile: k })} />
+    <span class=${'chip ' + (p.sampling_550 <= 1.05 ? 'ok' : '')} title="pixel scale; green: samples the diffraction limit at 550 nm">${p.arcsec_per_px.toFixed(2)}″/px</span>
+  </label>`;
+}
+
+function Header({ theme, setTheme, line, status, tel, hello, connected, screen, setScreen, imaging, send }) {
   const clk = status ? Number(status.clock_error_us) : -1;
   const maxClk = hello?.max_clock_error_us ?? 10;
   const clkText = clk < 0 ? 'clock ?' : clk < 1000 ? `clock ±${clk.toFixed(0)} µs` : `clock ±${(clk / 1000).toFixed(1)} ms`;
@@ -72,6 +92,7 @@ function Header({ theme, setTheme, line, status, tel, hello, connected, screen, 
       <${Chip} cls=${tel && tel.bus.lost > 0 ? 'warn' : ''}>bus ${tel ? tel.bus.lost : '—'} lost<//>
       <${Chip} cls=${sunEl > -6 ? 'warn' : ''}>Sun ${Number.isFinite(sunEl) ? sunEl.toFixed(0) + '°' : '—'}<//>
     </div>
+    <${ImagingPicker} imaging=${imaging} send=${send} />
     <div class="seg" role="group" aria-label="Display theme">
       <button class=${theme === 'dark' ? 'on' : ''} aria-pressed=${theme === 'dark'} onClick=${() => setTheme('dark')}>Dark</button>
       <button class=${theme === 'red' ? 'on' : ''} aria-pressed=${theme === 'red'} onClick=${() => setTheme('red')}>Red</button>
@@ -278,7 +299,7 @@ function GoTrack({ tracked, setTracked, status, setScreen }) {
     <button class="btn primary" onClick=${() => { setTracked(''); setScreen('track'); }}>Open the Track screen →</button></div>`;
 }
 
-function Passes({ hello, send, status, connected, preview, setPreview, updatePreviewRow, setScreen, tab, setTab }) {
+function Passes({ hello, send, status, connected, preview, setPreview, updatePreviewRow, setScreen, tab, setTab, imaging }) {
   const [group, setGroup] = useState(loadPref('group', 'stations'));
   const [names, setNames] = useState(loadPref('watch', 'ISS (ZARYA), CSS (TIANHE)'));
   const [hours, setHours] = useState(loadPref('hours', 12));
@@ -287,7 +308,8 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
   const [lighting, setLighting] = useState(loadPref('lighting', 'any'));
   const [maxMag, setMaxMag] = useState(loadPref('maxmag', 'any'));
   const [minSize, setMinSize] = useState(loadPref('minsize', 'any'));
-  const asp = hello?.narrow_arcsec_per_px;
+  const profile = activeProfile(imaging);
+  const asp = profile?.arcsec_per_px;
   const [rows, setRows] = useState([]);
   const [groupNames, setGroupNames] = useState([]);
   const [note, setNote] = useState('');
@@ -342,7 +364,7 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
       <label>Mag <${Select} value=${maxMag} onChange=${setMaxMag} options=${MAG_OPTS}
         title="keep passes predicted at least this bright (passes without a magnitude are hidden)" /></label>
       <label>Size <${Select} value=${minSize} onChange=${setMinSize} options=${sizeOpts(asp)}
-        title=${`largest angular size at the closest point, at least this (passes without a size are hidden)${asp ? `; ZWO ${asp.toFixed(2)}″/px, seeing usually 1.5–3″` : ''}`} /></label>
+        title=${`largest angular size at the closest point, at least this (passes without a size are hidden)${profile ? `; pixels for ${profile.name} (${asp.toFixed(2)}″/px); seeing is usually 1.5–3″` : ''}`} /></label>
       <button class="btn" onClick=${refresh} disabled=${busy || !connected}>${busy ? 'Working…' : 'Refresh'}</button>
     </div>
     ${!all && html`<div class="toolbar">
@@ -382,7 +404,7 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
             <td title=${p.sun_el_deg != null ? `Sun ${Number(p.sun_el_deg).toFixed(0)}° at max el` : ''}
               class=${p.sun_el_deg != null && p.sun_el_deg > -6 ? 'muted' : ''}>${p.sunlit_frac == null ? '?' : p.sunlit_frac > 0 ? `${Math.round(p.sunlit_frac * 100)}%${p.sun_el_deg > -6 ? ' ☀' : ''}` : '—'}</td>
             <td title=${p.std_mag != null ? `standard mag ${p.std_mag}${p.mag_estimated ? ' (from radar size)' : ''}` : 'no magnitude data'}>${fmtMag(p) ?? '—'}</td>
-            <td title=${p.size_m ? `${p.size_m.join(' × ')} m at ${Math.round(p.min_range_km)} km${hello?.narrow_arcsec_per_px ? ` · ~${Math.round(p.ang_size_arcsec / hello.narrow_arcsec_per_px)} px on the ZWO` : ''}` : 'no size data'}>${fmtSize(p) ?? '—'}</td>
+            <td title=${p.size_m ? `${p.size_m.join(' × ')} m at ${Math.round(p.min_range_km)} km${asp ? ` · ~${Math.round(p.ang_size_arcsec / asp)} px (${profile.name})` : ''}` : 'no size data'}>${fmtSize(p) ?? '—'}</td>
             <td>${plan}</td>
             <td>${current ? 'active' : html`<button class="btn" style="min-height:28px" disabled=${p.planned !== false && !chosen.mode} onClick=${(e) => { e.stopPropagation(); track(p); }}>Track</button>`}</td>
           </tr>`;
@@ -828,7 +850,7 @@ function App() {
       onOpen: () => { setConnected(true); setLine('connected'); },
       onClose: () => { setConnected(false); setLine('gateway connection lost; reconnecting…'); },
       onMessage: (m) => {
-        if (m.type === 'hello') setHello(m);
+        if (m.type === 'hello') { setHello(m); setImaging(m.imaging || null); } else if (m.type === 'imaging') setImaging(m);
         else if (m.type === 'telemetry') {
           setTel(m);
           const t = Number(m.t_ns) / 1e9;
@@ -877,6 +899,7 @@ function App() {
   }, [send]);
   const [listTab, setListTabState] = useState(loadPref('listtab', 'passes'));
   const [airView, setAirView] = useState(null);
+  const [imaging, setImaging] = useState(null);
   const ask = useCallback((op, args) => link.current.request(op, args), []);
   const setListTab = (t) => { setListTabState(t); savePref('listtab', t); setPreviewState(null); previewReq.current = null; };
   const updatePreviewRow = useCallback((row) => setPreviewState((pv) => (pv && pv.key === passKey(row) ? { ...pv, row } : pv)), []);
@@ -884,6 +907,7 @@ function App() {
 
   return html`
     <${Header} theme=${theme} setTheme=${setTheme} line=${line} status=${status} tel=${tel} hello=${hello} connected=${connected}
+      imaging=${imaging} send=${send}
       screen=${screen} setScreen=${setScreen} />
     <div class="layout" hidden=${screen !== 'drives'}>
       <${DrivesScreen} tel=${tel} hello=${hello} status=${status} send=${send}
@@ -894,7 +918,7 @@ function App() {
         air=${listTab === 'air' ? airView : null} />
       <div class="pv-lower">
         <div class="pv-lists">
-          <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview}
+          <${Passes} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview} setPreview=${setPreview} imaging=${imaging}
             updatePreviewRow=${updatePreviewRow} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} />
           <${Conjunctions} hello=${hello} send=${send} status=${status} connected=${connected} preview=${preview}
             setConjPreview=${setConjPreview} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} />
@@ -902,7 +926,7 @@ function App() {
             setAirView=${setAirView} setScreen=${setScreen} tab=${listTab} setTab=${setListTab} mask=${hello?.tracking?.horizon_min_el_deg ?? 10} />
         </div>
         <${PassDetail} preview=${preview} status=${status} clearPreview=${() => setPreview(null)} air=${listTab === 'air' ? airView : null}
-          asp=${hello?.narrow_arcsec_per_px} />
+          asp=${activeProfile(imaging)?.arcsec_per_px} />
       </div>
     </div>
     <div class="layout" hidden=${screen !== 'track'}>

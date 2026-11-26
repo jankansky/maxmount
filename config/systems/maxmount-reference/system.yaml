@@ -51,12 +51,42 @@ tracking:
   point_rate_hz: 20
   lookahead_s: 5
 
-# Narrow-field imaging camera (ZWO behind the C8 with the 0.63x SCT Corrector IV). Used for the
-# Passes screen's angular-size filter (shown in pixels). focal_mm: 1260-1450 mm depending on
-# spacing; replace with the plate-solved value.
+# Narrow-field imaging profiles: the telescope + reducer/Barlow + camera combinations in use.
+# The GUI header switches the active one (remembered on the Pi); it sets pixel counts, the
+# passes size filter, and later the camera service's sampling and processing windows.
+# focal_mm: replace with the plate-solved value. C8 aperture 203.2 mm; diffraction limit
+# lambda/D = 0.56" at 550 nm, so Nyquist sampling needs pixels <= 0.28" (0.35" at 685 nm IR).
 imaging:
-  narrow_pixel_um: 3.76
-  narrow_focal_mm: 1350
+  default: deep_sky
+  profiles:
+    deep_sky:
+      name: "Deep sky: C8 + 0.63x Corrector IV"
+      camera: ZWO ASI533MM            # 3.76 um, 3008 x 3008
+      pixel_um: 3.76
+      sensor_px: [3008, 3008]
+      focal_mm: 1350                  # 1260-1450 depending on spacing
+      note: "0.57\"/px: seeing-limited imaging, acquisition (29' field); 2x coarser than Nyquist"
+    high_res:
+      name: "High-res: C8 native f/10"
+      camera: ZWO ASI533MM
+      pixel_um: 3.76
+      sensor_px: [3008, 3008]
+      focal_mm: 2032
+      note: "0.38\": near Nyquist with an IR-pass filter (685 nm); 19' field"
+    high_res_barlow:
+      name: "High-res: C8 + 1.5x Barlow, f/15"
+      camera: ZWO ASI533MM
+      pixel_um: 3.76
+      sensor_px: [3008, 3008]
+      focal_mm: 3048
+      note: "0.25\": Nyquist in visible light; 13' field, 5x dimmer than the deep-sky profile"
+    high_res_585:
+      name: "High-res: C8 native f/10 + 2.9 um camera"
+      camera: ZWO ASI585MM (candidate)  # 2.9 um, 3840 x 2160
+      pixel_um: 2.9
+      sensor_px: [3840, 2160]
+      focal_mm: 2032
+      note: "0.29\": Nyquist at f/10 with no Barlow; 19' x 11' field; fast ROI capture"
 
 # ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
 # 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.

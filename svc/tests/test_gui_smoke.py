@@ -67,6 +67,9 @@ def test_main_screen(gui_url):
         page.get_by_role("button", name="Go").click()
         page.wait_for_function("() => document.querySelector('[aria-label=Target] .lcd').textContent.includes('az 15.00')", timeout=15000)
 
+        # The imaging profile picker (sim-altaz: the one default profile) and its pixel scale.
+        assert page.get_by_label("Imaging profile").is_visible()
+        assert "0.57″/px" in page.locator("label.imaging").text_content()
         page.get_by_role("button", name="Red").click()
         assert page.evaluate("() => document.documentElement.dataset.theme") == "red"
 

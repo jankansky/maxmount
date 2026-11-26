@@ -137,6 +137,47 @@ only the site terms.
 - **Autofocus:** half-flux-radius curve fit; triggered by temperature change, filter change, side flip, elapsed time and before scheduled passes; learned µm/°C compensation between runs.
 - **Rotator:** needed early; see [Field rotator](#field-rotator).
 
+### Sampling and imaging profiles
+
+Lucky imaging and deconvolution recover detail down to the diffraction limit only if the
+pixels sample it. For the C8 (203 mm), λ/D is 0.56″ at 550 nm (Rayleigh 0.68″), so Nyquist
+sampling needs pixels of at most λ/(2D): **0.28″ at 550 nm, 0.35″ at 685 nm** (IR-pass, the
+usual lucky-imaging band because seeing is better in the red). Equivalently, the f-ratio should
+be about 2p/λ for pixel size p: f/14 visible and f/11 IR for 3.76 µm, f/10.5 visible for 2.9 µm.
+A 20 cm aperture is well suited to lucky imaging: at r₀ = 5–10 cm a useful fraction of short
+frames is close to diffraction-limited.
+
+| Configuration | Focal length | Pixel scale | Pixel / Nyquist pixel (550 / 685 nm) | Field (sensor) |
+| --- | --- | --- | --- | --- |
+| C8 + 0.63× Corrector IV, 3.76 µm (ASI533) | ~1350 mm, f/6.6 | 0.57″ | 2.06 / 1.65 | 29′ × 29′ |
+| C8 native f/10, 3.76 µm | 2032 mm | 0.38″ | 1.37 / 1.10 | 19′ × 19′ |
+| C8 + 1.5× Barlow, f/15, 3.76 µm | 3048 mm | 0.25″ | 0.91 / 0.73 | 13′ × 13′ |
+| C8 native f/10, 2.9 µm (ASI585-class) | 2032 mm | 0.29″ | 1.05 / 0.85 | 19′ × 11′ |
+
+Conclusions:
+
+- **The corrector configuration is for deep sky and acquisition.** 0.57″ suits seeing-limited
+  imaging (a 2″ star spans ~3.5 px, fine for long-exposure deconvolution) and its 29′ field
+  makes LEO acquisition forgiving, but it is 2× coarser than Nyquist: diffraction-limited
+  detail (about 1.1 m on the ISS at 400 km) falls inside one pixel. Drizzling lucky-imaging
+  stacks recovers part of it, since tracking jitter dithers the frames.
+- **High-resolution work (planets, ISS and other large LEO targets) uses the native f/10 path
+  without the corrector.** With a 2.9 µm sensor (ASI585/ASI462 class) it is Nyquist-sampled at
+  f/10 with no Barlow: the full f/10 brightness, a 19′ × 11′ field, and the fast ROI readout
+  this project needs. The ASI533 at native f/10 is close in IR; a 1.5× Barlow (f/15) samples
+  visible light but is 5× dimmer than the corrector path and has a 13′ field, which needs the
+  camera loop to acquire LEO targets whose predictions are off by arcminutes.
+- **Costs of longer focal length:** smaller field (acquisition), less light per pixel (short
+  lucky-imaging exposures on faint satellites), and a different back-focus stack (the corrector's
+  90.3 mm budget does not apply without it).
+
+**Imaging profiles.** Each optical configuration is a named profile in the system file
+(`imaging.profiles`: pixel size, focal length, aperture, sensor size, camera), and the operator
+picks the active one in the GUI header; the gateway remembers it on the Pi. Pixel counts,
+the passes size filter and, later, the camera service's sampling, ROI and processing windows
+follow the active profile. Focal lengths are replaced with plate-solved values as they are
+measured.
+
 ## Camera service
 
 The operations screen is built around the two camera views. The corrections (timing,
@@ -418,7 +459,7 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 
 - [x] iPOS4808 BX-CAT firmware supports CSP (0x6502 bit 7). It has no 0x60B1/0x60B2, so CSP runs without feedforward. Each PDO holds at most 64 bits.
 - [ ] Choose the field rotator: third EtherCAT axis or commercial USB rotator.
-- [ ] Choose the ZWO camera for high-rate ROI capture and check its frame rate at the planned ROI and bit depth; size the recording SSD.
+- [ ] Choose the ZWO camera for high-rate ROI capture and check its frame rate at the planned ROI and bit depth; size the recording SSD. A 2.9 µm sensor (ASI585/ASI462 class) Nyquist-samples the C8 at native f/10 (see [Sampling and imaging profiles](#sampling-and-imaging-profiles)); the ASI533 needs a 1.5× Barlow for the same in visible light.
 - [ ] Measure the chosen ZWO camera's photon transfer curve (read noise, e⁻/ADU, full well against gain, HCG switch point) for automatic exposure and gain (the characterisation feature does this).
 - [ ] Light-tight cover: near term, calibration frames are collected with manual steps (the GUI prompts to cap or uncap and checks darks for light leaks); long term, add a motorised cap and a flat panel (or a flip-flat that does both) with ASCOM/INDI drivers for unattended collection.
 - [ ] Confirm the iPOS accepts the ADRT sin/cos signal directly; record the encoder line count.

@@ -67,16 +67,80 @@ class AdsbSettings:
     max_track_s: float = 600.0  # longest aircraft track before re-planning is needed
 
 
+RAD_AS = 206264.806
+
+
 @dataclass
-class ImagingSettings:
-    # Narrow-field camera (ZWO behind the C8): sets the GUI's angular-size filter in pixels.
-    # Replace focal_mm with the plate-solved value once known.
-    narrow_pixel_um: float = 3.76
-    narrow_focal_mm: float = 1350.0
+class ImagingProfile:
+    """One narrow-field optical configuration (telescope, reducer or Barlow, camera)."""
+    key: str
+    name: str
+    pixel_um: float
+    focal_mm: float
+    aperture_mm: float = 203.2
+    sensor_px: tuple[int, int] | None = None
+    camera: str = ""
+    note: str = ""
 
     @property
-    def narrow_arcsec_per_px(self) -> float:
-        return 206.265 * self.narrow_pixel_um / self.narrow_focal_mm
+    def arcsec_per_px(self) -> float:
+        return RAD_AS * self.pixel_um / (self.focal_mm * 1000)
+
+    @property
+    def f_ratio(self) -> float:
+        return self.focal_mm / self.aperture_mm
+
+    def nyquist_px_arcsec(self, wavelength_nm: float) -> float:
+        """The largest pixel that samples the diffraction limit: lambda / (2 D)."""
+        return RAD_AS * wavelength_nm * 1e-9 / (2 * self.aperture_mm * 1e-3)
+
+    def summary(self) -> dict:
+        d = {
+            "key": self.key, "name": self.name, "camera": self.camera, "note": self.note,
+            "pixel_um": self.pixel_um, "focal_mm": self.focal_mm, "aperture_mm": self.aperture_mm,
+            "f_ratio": round(self.f_ratio, 2), "arcsec_per_px": round(self.arcsec_per_px, 4),
+            "diffraction_arcsec": round(RAD_AS * 550e-9 / (self.aperture_mm * 1e-3), 3),  # lambda/D at 550 nm
+            # Pixel scale over the Nyquist pixel: <= 1 samples the diffraction limit.
+            "sampling_550": round(self.arcsec_per_px / self.nyquist_px_arcsec(550), 2),
+            "sampling_685": round(self.arcsec_per_px / self.nyquist_px_arcsec(685), 2),
+        }
+        if self.sensor_px:
+            d["fov_arcmin"] = [round(n * self.arcsec_per_px / 60, 1) for n in self.sensor_px]
+        return d
+
+
+@dataclass
+class ImagingSettings:
+    """Narrow-field imaging profiles (system file `imaging:`); the operator picks the active
+    one in the GUI (remembered by the gateway, see gateway.ImagingState)."""
+    profiles: dict[str, ImagingProfile] = field(default_factory=lambda: {
+        "default": ImagingProfile("default", "C8 + 0.63x corrector + 3.76 um camera", 3.76, 1350.0, sensor_px=(3008, 3008))})
+    default: str = "default"
+
+
+def _imaging(doc: dict) -> ImagingSettings:
+    im = doc.get("imaging") or {}
+    if not im:
+        return ImagingSettings()
+    if "narrow_pixel_um" in im:  # the earlier single-camera form
+        p = ImagingProfile("default", "narrow field", float(im["narrow_pixel_um"]), float(im.get("narrow_focal_mm", 1350)))
+        return ImagingSettings({"default": p}, "default")
+    profiles = {}
+    for key, v in (im.get("profiles") or {}).items():
+        try:
+            profiles[str(key)] = ImagingProfile(
+                key=str(key), name=str(v.get("name", key)), pixel_um=float(v["pixel_um"]), focal_mm=float(v["focal_mm"]),
+                aperture_mm=float(v.get("aperture_mm", 203.2)),
+                sensor_px=tuple(int(x) for x in v["sensor_px"]) if v.get("sensor_px") else None,
+                camera=str(v.get("camera", "")), note=str(v.get("note", "")))
+        except (KeyError, TypeError, ValueError) as e:
+            raise ConfigError(f"imaging profile '{key}': {e}") from None
+    if not profiles:
+        raise ConfigError("imaging: no profiles")
+    default = str(im.get("default") or next(iter(profiles)))
+    if default not in profiles:
+        raise ConfigError(f"imaging.default '{default}' is not a profile")
+    return ImagingSettings(profiles, default)
 
 
 @dataclass
@@ -212,8 +276,7 @@ def load_system(path: str | Path) -> SystemSettings:
         pointing_file=pointing_file,
         axes_info=_axes_info(doc, path.resolve().parent.parent.parent / "drives"),
         fieldbus=dict(doc.get("fieldbus") or {}),
-        imaging=ImagingSettings(**{k: float(v) for k, v in (doc.get("imaging") or {}).items()
-                                   if k in ImagingSettings.__dataclass_fields__}),
+        imaging=_imaging(doc),
         adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
                              for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),
     )

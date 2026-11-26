@@ -61,7 +61,8 @@ def test_gateway_serves_the_gui_and_bridges_requests(stack):
                 async with http.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
                     hello = await _recv_until(ws, lambda m: m["type"] == "hello")
                     assert hello["limits"]["el"]["max_deg"] == 180
-                    assert hello["narrow_arcsec_per_px"] == pytest.approx(206.265 * 3.76 / 1350, abs=1e-3)  # default camera
+                    im = hello["imaging"]  # sim-altaz has no imaging section: one default profile
+                    assert im["active"] == "default" and im["profiles"][0]["arcsec_per_px"] == pytest.approx(206.265 * 3.76 / 1350, abs=1e-3)
                     tel = await _recv_until(ws, lambda m: m["type"] == "telemetry")
                     assert {a["axis"] for a in tel["axes"]} == {"az", "el"}
                     assert "ra_h" in tel["sky"] and "lst_h" in tel["sky"]  # computed by the gateway
@@ -443,5 +444,47 @@ def test_aircraft_list_and_selection(stack, tmp_path):
                 assert sel["icao"] == a["icao"] and len(sel["trail"]) == 2 and len(sel["path"]) == 121 and len(sel["sky"]) == 121
         finally:
             await gw.stop()
+
+    asyncio.run(run())
+
+
+
+def test_imaging_profiles_switch_and_persist(stack, tmp_path, monkeypatch):
+    """The GUI switches the active imaging profile; every client hears it and it survives a
+    gateway restart (state file under XDG_STATE_HOME)."""
+    import dataclasses
+
+    from maxmount_svc.config import ImagingProfile, ImagingSettings
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    settings = dataclasses.replace(stack, imaging=ImagingSettings({
+        "deep_sky": ImagingProfile("deep_sky", "Deep sky", 3.76, 1350, sensor_px=(3008, 3008)),
+        "high_res": ImagingProfile("high_res", "High-res", 2.9, 2032, sensor_px=(3840, 2160)),
+    }, "deep_sky"))
+    port = 18000 + __import__("random").randint(11801, 13000)
+
+    async def run():
+        for restart in (False, True):
+            gw = await _session(settings, port)
+            try:
+                async with aiohttp.ClientSession() as http, http.ws_connect(f"http://127.0.0.1:{port}/ws") as a, \
+                        http.ws_connect(f"http://127.0.0.1:{port}/ws") as b:
+                    hello = await _recv_until(a, lambda m: m["type"] == "hello")
+                    if restart:
+                        assert hello["imaging"]["active"] == "high_res"  # remembered
+                        return
+                    assert hello["imaging"]["active"] == "deep_sky"
+                    hr = next(p for p in hello["imaging"]["profiles"] if p["key"] == "high_res")
+                    assert hr["arcsec_per_px"] == pytest.approx(0.2944, abs=1e-3) and hr["sampling_550"] == pytest.approx(1.05, abs=0.01)
+                    assert hr["fov_arcmin"] == [18.8, 10.6] and hr["f_ratio"] == pytest.approx(10.0, abs=0.01)
+                    await a.send_str(json.dumps({"type": "request", "id": 1, "op": "set_imaging", "args": {"profile": "nope"}}))
+                    assert not (await _recv_until(a, lambda m: m["type"] == "reply" and m["id"] == 1))["ok"]
+                    await a.send_str(json.dumps({"type": "request", "id": 2, "op": "set_imaging", "args": {"profile": "high_res"}}))
+                    rep = await _recv_until(a, lambda m: m["type"] == "reply" and m["id"] == 2)
+                    assert rep["ok"] and "0.29" in rep["message"]
+                    other = await _recv_until(b, lambda m: m["type"] == "imaging")
+                    assert other["active"] == "high_res"
+            finally:
+                await gw.stop()
 
     asyncio.run(run())

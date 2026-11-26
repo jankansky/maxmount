@@ -172,3 +172,6 @@ table.kv td { padding: 3px 0; }
   border: 1px solid var(--ok); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
 label.check { display: flex; gap: 6px; align-items: center; }
 label.check input { min-height: 0; }
+label.imaging { display: flex; gap: 6px; align-items: center; }
+label.imaging select { max-width: 330px; }
+.chip.ok { background: var(--ok-bg); color: var(--ok); }

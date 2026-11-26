@@ -17,6 +17,11 @@ svc/.venv/bin/mount-svc --system $SYS gui           # http://<pi>:8080
 The header is shared by every screen:
 - status line with the latest event or reply;
 - chips for clock error (from chrony), site source, EtherCAT lost frames and Sun elevation;
+- **Imaging** profile picker: the active narrow-field configuration from `imaging.profiles`
+  in the system file (e.g. deep sky with the corrector, high-res at native f/10), with its
+  pixel scale (green when it samples the diffraction limit at 550 nm; hover for focal length,
+  f-ratio, field and sampling). The gateway remembers the choice on the Pi and every open
+  GUI follows it;
 - **Dark / Red** theme switch, remembered by the browser.
 
 Screens: **Passes** (`#passes`) to choose a satellite pass, **Track** (the default) to follow
@@ -49,9 +54,8 @@ it, **Drives** (`#drives`).
     `config/satellites.yaml`. The **Mag** filter hides passes fainter than the limit, and
     passes without a magnitude. Flares and tumbling are not predicted.
   - **Size** keeps passes whose largest angular size (largest dimension over the closest
-    range) is at least 5, 10, 20 or 40″, shown in pixels on the narrow-field camera from
-    `imaging.narrow_pixel_um` and `imaging.narrow_focal_mm` in the system file (set the focal
-    length from plate solving). Passes without a size are hidden.
+    range) is at least 5, 10, 20 or 40″, labelled in pixels of the active imaging profile.
+    Passes without a size are hidden.
   - **Max el ≥** hides low passes. Changing a selector searches again; after editing Watch,
     press Enter or **Refresh**. An empty list says why.
   - Click a pass (or select it and press Enter) to preview it; click it again or press
