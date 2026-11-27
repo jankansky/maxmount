@@ -8,14 +8,16 @@ export function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+// aspect: height / width, or 'fill' to take the height the CSS layout gives the canvas.
 function setup(canvas, aspect) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth || 300;
-  const h = Math.round(w * aspect);
+  const fill = aspect === 'fill';
+  const h = fill ? canvas.clientHeight || 150 : Math.round(w * aspect);
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
-    canvas.style.height = h + 'px';
+    if (!fill) canvas.style.height = h + 'px';
   }
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

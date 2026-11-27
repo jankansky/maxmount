@@ -553,6 +553,10 @@ def test_closed_loop_and_centroid_chart(gui_url, served, tmp_path):  # noqa: F81
             page.set_viewport_size({"width": 1280, "height": 900})
             page.wait_for_timeout(500)
             page.locator("main.col-main").screenshot(path=str(tmp_path / "main-1280.png"))
+            for wv in (1920, 2560):
+                page.set_viewport_size({"width": wv, "height": 1200})
+                page.wait_for_timeout(500)
+                page.locator("main.col-main").screenshot(path=str(tmp_path / f"main-{wv}.png"))
             page.get_by_role("button", name="Open loop").click()
             page.wait_for_function("() => document.querySelector('[aria-label=\"Loop state\"]').textContent === 'OPEN'", timeout=10000)
             browser.close()

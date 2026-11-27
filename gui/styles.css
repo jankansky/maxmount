@@ -209,3 +209,7 @@ label.imaging select { max-width: 330px; }
 .loopctl .chip { margin-left: 4px; }
 .camstack { flex: 1.33 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .camstack > .panel { flex: 0 0 auto; }
+/* The centroid chart takes the height left beside the C8 panel (none wasted under either). */
+.camstack > .panel.centroid { flex: 1 1 auto; }
+.fillchart { position: relative; flex: 1 1 0; min-height: 140px; }
+.fillchart canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
