@@ -92,7 +92,7 @@ removed; the planner's tests check the corrected statement.)
     1. The widefield GigE camera detects the satellite and measures its offset from prediction.
     2. `mount-svc` updates the time and cross-track offsets, which brings the target into the C8 field.
     3. The ZWO camera tracks a small region of interest at 50–200 fps and holds the target centered.
-       Done so far: the ROI follows the target across the sensor (`roitrack.py`: block-sum detection, gated lock, alpha-beta filter, ROI moves that allow for the camera's pipeline latency), and each frame's offset from the sensor centre is published on `camera/zwo/centroid`. Not yet: mount-svc turning those offsets into time and cross-track corrections.
+       Done: the ROI follows the target across the sensor (`roitrack.py`: block-sum detection, gated lock, alpha-beta filter, ROI moves that allow for the camera's pipeline latency), each frame's offset from the sensor centre is published on `camera/zwo/centroid`, and `mount-svc` closes the loop (`closedloop.py`): about once a second the averaged offset becomes a time and cross-track correction (satellites) or an az/el axis offset (other targets), solved with the plan's own derivatives, limited to about 20 px of image motion per step. The camera's orientation and scale relative to the axes are calibrated from two small axis moves. Tested against a simulated camera that draws the target where it really is relative to the mount's pointing. Not yet: the real ASI224MC; feed-forward of the mount's corrections to the ROI tracker, which would allow larger steps.
 - **Hand control:** jog and offset commands from the GUI apply on top of any target.
 
 ## Timekeeping

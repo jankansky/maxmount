@@ -644,6 +644,10 @@ class ZwoSimBackend(_ZwoBase):
         self._t0 = time.monotonic()
         self._next = 0.0
         self.drift = (350.0, 250.0)  # the target's slow excursion from the sensor centre, px
+        # While the mount tracks: the target's offset from the boresight (unbinned px) where it
+        # really is (simsky.SimSky.offset_px), or None to drift as above.
+        self.sky = None
+        self._field = (0, 0)  # the star field's shift (px) while the sky model is active
         bayer = np.ones((h, w), np.float32)
         bayer[0::2, 0::2], bayer[1::2, 1::2] = 0.8, 0.65
         self._bayer = bayer
@@ -658,8 +662,17 @@ class ZwoSimBackend(_ZwoBase):
 
     def target_xy(self, t: float | None = None) -> tuple[float, float]:
         """Where the simulated target is (unbinned sensor px) at monotonic time t."""
-        t = (time.monotonic() if t is None else t) - self._t0
         w, h = self.sensor
+        if self.sky is not None and t is None:
+            try:
+                off = self.sky()
+            except Exception:  # noqa: BLE001 - the sky model must not stop the video
+                off = None
+            self._field = (int(round(off[2])), int(round(off[3]))) if off is not None else (0, 0)
+            if off is not None:  # plus ~0.4 px of seeing jitter
+                return (w / 2 - 0.5 + off[0] + float(self._rng.normal(0, 0.4)),
+                        h / 2 - 0.5 + off[1] + float(self._rng.normal(0, 0.4)))
+        t = (time.monotonic() if t is None else t) - self._t0
         return (w / 2 + self.drift[0] * math.sin(0.2 * t) + 30 * math.sin(0.7 * t),
                 h / 2 + self.drift[1] * math.sin(0.15 * t + 1.0) + 20 * math.cos(0.9 * t) - self.drift[1] * math.sin(1.0))
 
@@ -670,10 +683,16 @@ class ZwoSimBackend(_ZwoBase):
         b = int(self.v["bin"])
         exp_ms = self.v["exposure_ms"]
         sx, sy, sw, sh = x * b, y * b, w * b, h * b
-        e = self._sky[sy:sy + sh, sx:sx + sw].copy()
+        # The target first: with the sky model it also says where the star field is.
+        tx, ty = self.target_xy()
+        fx, fy = self._field
+        if fx or fy:  # stars move with the pointing (wrapping around the sensor)
+            H, W = self._sky.shape
+            e = self._sky[np.ix_((np.arange(sy, sy + sh) - fy) % H, (np.arange(sx, sx + sw) - fx) % W)]
+        else:
+            e = self._sky[sy:sy + sh, sx:sx + sw].copy()
         # The target: a body and solar panels. Computed in a small window around it only (the
         # Pi computes these frames on the CPU).
-        tx, ty = self.target_xy()
         cx, cy = tx - sx, ty - sy
         x0, x1 = max(int(cx) - 90, 0), min(int(cx) + 90, sw)
         y0, y1 = max(int(cy) - 24, 0), min(int(cy) + 24, sh)

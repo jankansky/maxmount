@@ -340,10 +340,19 @@ def cmd_zwo(args, sys_: SystemSettings) -> int:
     except CameraError as e:
         print(f"mount-svc: {e}", file=sys.stderr)
         return 1
-    return _serve_camera(sys_, backend, "zwo", cfg.data_dir, cfg.liveview_fps, "pi")
+    setup = None
+    if backend.simulated and sys_.site is not None:
+        def setup(client):  # the simulated target appears where it really is while the mount tracks
+            from .simsky import SimSky
+
+            sky = SimSky(sys_, client)
+            backend.sky = sky.offset_px
+            return sky.close
+    return _serve_camera(sys_, backend, "zwo", cfg.data_dir, cfg.liveview_fps, "pi", setup)
 
 
-def _serve_camera(sys_: SystemSettings, backend, camera_id: str, data_dir: str, fps: float, save_to: str) -> int:
+def _serve_camera(sys_: SystemSettings, backend, camera_id: str, data_dir: str, fps: float, save_to: str,
+                  setup=None) -> int:
     from .camera import CameraService
     from .mount import MountClient
 
@@ -354,12 +363,15 @@ def _serve_camera(sys_: SystemSettings, backend, camera_id: str, data_dir: str, 
         svc = CameraService(client, backend, camera_id, data_dir, fps)
         if save_to in svc.storage:
             svc._save_to = save_to
+        cleanup = setup(client) if setup else None
         svc.start()
         print(f"camera service on {svc.key('*')} ({'simulated' if backend.simulated else camera_id}); Ctrl-C to stop")
         while not stop:
             time.sleep(0.2)
         svc.close()
         backend.close()
+        if cleanup:
+            cleanup()
     return 0
 
 

@@ -57,6 +57,35 @@ current one without disabling the drives. Offsets take effect within about 0.3 s
 buffered future points are re-sent. The along-track and cross-track corrections apply to a
 satellite target; the axis offsets apply to any target (hand control, camera loop).
 
+**Camera loop** (`closed_loop` in the system file; TargetCommand `closed_loop`, GUI:
+Corrections, Auto). `mount-svc serve` subscribes to `camera/<closed_loop.camera>/centroid`.
+While a target is tracked and the camera reports a lock, it averages the centroids for
+`avg_s`, converts the offset from the sensor centre to an angle through the camera geometry,
+and corrects:
+
+- satellites: the along-track time offset and the cross-track offset (over the top: time
+  and the azimuth axis);
+- other targets: the az/el axis offsets.
+
+The correction is `gain` (0.5) of the measured error, at most `max_step_px` (20 px) of image
+motion so the ROI tracker keeps the target, then it waits `settle_s` for the axes to follow:
+about one update a second. The solve uses the plan's own derivatives (how the commanded axes
+change per second of time offset or per arcsecond of cross-track), so signs follow the target
+code. The loop opens if the error keeps growing (wrong geometry) or the corrections add up to
+`max_total_arcsec` without centring anything (locked on the wrong object). Hand corrections
+(`add_offsets`) add to the loop's. Camera geometry: the configured rotation, flip and pixel
+scale (the loop camera's imaging profile), or a calibration (TargetCommand `calibrate_camera`,
+GUI: Calibrate): with the target locked, the boresight steps in cross-elevation and then in
+elevation, and the target's shifts on the sensor give the 2 × 2 mapping, mirror included. It is
+saved in `~/.local/state/maxmount/<system>-camera-<camera>.json`.
+
+With `mount-svc zwo --sim`, the simulated target is drawn where it really is while the mount
+tracks (`simsky.py`): the mount's axis positions from telemetry against the target with its
+own "true" errors (`cameras.zwo.sim_*`: 0.12 s along-track and 25" cross-track for
+satellites, a 40", -25" pointing error, a sensor rotated 20 deg), and the stars move with the
+pointing. In tests the loop finds those errors and the calibration measures the rotation to
+about half a degree.
+
 Each track enables the axes, slews to where the target will be when the slew ends, then
 streams time-tagged points (20 Hz, 5 s ahead) that `mount-rt` interpolates at 1 kHz. Ctrl-C,
 a drive fault or a following-error trip disables the axes. If `mount-svc` dies, the trajectory
@@ -127,8 +156,9 @@ continues) to keep the target centred. A ZWO camera keeps delivering a few frame
 old position after a move; `cameras.zwo.roi_latency_frames` (default 2, to be measured on the
 real camera) says how many, so each frame is measured and logged with the position it was
 really read at. Each measurement is published on `camera/zwo/centroid` with the target's
-offset from the sensor centre, for the future mount closed loop. The simulator's target drifts
-up to ~350 px from the centre, so without tracking it leaves a small ROI.
+offset from the sensor centre, which the camera loop below uses. With no mount tracking, the
+simulator's target drifts up to ~350 px from the centre, so without ROI tracking it leaves a
+small ROI.
 
 Disk speed limits long recordings. The Pi's SD card sustains about 34 MB/s
 (`dd ... conv=fdatasync`, 2026-11-26), about 110 fps of 640 × 480 RAW8 or 26 fps full frame.

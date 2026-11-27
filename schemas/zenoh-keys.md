@@ -12,13 +12,13 @@ are planned.
 | `mount/cmd` | queryable | `MountCommand` → `CommandReply` | GUI, scheduler → mount-rt |
 | `mount/telemetry` | pub (50 Hz) | `MountTelemetry` | mount-rt → all |
 | `mount/telemetry/raw` | pub (every cycle, in batches of 50) | `MountTelemetryBatch` | mount-rt → loggers, camera-svc |
-| `svc/target` | queryable | `TargetCommand` → `TargetReply` (track, go to, offsets, stop, axis jog) | GUI, scheduler, camera loop → mount-svc |
+| `svc/target` | queryable | `TargetCommand` → `TargetReply` (track, go to, set/add offsets, stop, axis jog, camera loop on/off, camera calibration) | GUI, scheduler, camera loop → mount-svc |
 | `svc/passes` | queryable | `PassesRequest` → `PassesReply` | GUI, scheduler → mount-svc |
 | `svc/status` | pub (2 Hz) | `ServiceStatus` | mount-svc → GUI, scheduler |
 | `camera/<id>/status` | pub (1 Hz and on change) | `CameraStatus` (camera.proto) | camera service (`mount-svc dslr`: id `dslr`; `mount-svc zwo`: id `zwo`) → GUI |
 | `camera/<id>/frame` | pub | `CameraFrame`: live view JPEG, and each capture's preview with histogram | camera service → GUI |
 | `camera/<id>/cmd` | queryable | `CameraCommand` → `CameraReply` (settings, capture, bulb, live view, save to, abort, SER recording, ROI tracking) | GUI → camera service |
-| `camera/<id>/centroid` | pub (every frame while ROI tracking) | `CameraCentroid`: the target's sensor position, offset from the sensor centre, velocity, mid-exposure time | camera service (`zwo`) → mount-svc (closed loop, not yet) |
+| `camera/<id>/centroid` | pub (every frame while ROI tracking) | `CameraCentroid`: the target's sensor position, offset from the sensor centre, velocity, mid-exposure time | camera service (`zwo`) → mount-svc (camera loop, `closed_loop.camera`) |
 | `time/status` | pub | clock source, offset, error estimate (TBD) | time monitor → mount-svc, GUI |
 | `safety/status` | pub | safe/unsafe + reasons (TBD) | supervisor → all |
 | `weather/*` | pub | sensor readings (TBD) | weather service → supervisor |

@@ -445,53 +445,67 @@ function Corrections({ status, send }) {
     az_arcsec: Number(o.az_arcsec || 0), el_arcsec: Number(o.el_arcsec || 0),
   };
   const [nudge, setNudge] = useState(10);
-  const apply = (patch) => send('target', { set_offsets: { ...cur, ...patch } });
+  // Steps add to the offsets (the camera loop may be changing them too); zero sets them.
+  const add = (d) => send('target', { add_offsets: d });
+  const zero = (patch) => send('target', { set_offsets: { ...cur, ...patch } });
   const isSat = !!status?.tle_line1;
+  const loop = status?.loop || {};
+  const auto = !!loop.on;
+  const setAuto = (on) => send('target', { closed_loop: { on } });
+  const live = auto && (loop.state === 'correcting' || loop.state === 'settling');
+  const calibrated = String(loop.geometry || '').startsWith('calibrated');
+  const loopState = loop.state === 'waiting' ? `waiting for a locked ${loop.camera || 'camera'} centroid` : (loop.state || 'off');
   return html`<section class="panel corr" aria-label="Corrections">
     <div class="group">
       <span class="small">Timing along the path · ${STEPS.timeFine} s / ${STEPS.timeCoarse} s${isSat ? '' : ' (satellites)'}</span>
       <div class="pad5">
-        <button aria-label="Timing back coarse" onClick=${() => apply({ time_offset_s: cur.time_offset_s - STEPS.timeCoarse })}>⏪</button>
-        <button aria-label="Timing back fine" onClick=${() => apply({ time_offset_s: cur.time_offset_s - STEPS.timeFine })}>◀</button>
-        <button class="zero" aria-label="Zero timing" onClick=${() => apply({ time_offset_s: 0 })}>0</button>
-        <button aria-label="Timing forward fine" onClick=${() => apply({ time_offset_s: cur.time_offset_s + STEPS.timeFine })}>▶</button>
-        <button aria-label="Timing forward coarse" onClick=${() => apply({ time_offset_s: cur.time_offset_s + STEPS.timeCoarse })}>⏩</button>
+        <button aria-label="Timing back coarse" onClick=${() => add({ time_offset_s: -STEPS.timeCoarse })}>⏪</button>
+        <button aria-label="Timing back fine" onClick=${() => add({ time_offset_s: -STEPS.timeFine })}>◀</button>
+        <button class="zero" aria-label="Zero timing" onClick=${() => zero({ time_offset_s: 0 })}>0</button>
+        <button aria-label="Timing forward fine" onClick=${() => add({ time_offset_s: STEPS.timeFine })}>▶</button>
+        <button aria-label="Timing forward coarse" onClick=${() => add({ time_offset_s: STEPS.timeCoarse })}>⏩</button>
       </div>
       <span class="mono">${cur.time_offset_s >= 0 ? '+' : ''}${cur.time_offset_s.toFixed(2)} s</span>
     </div>
     <div class="group">
       <span class="small">Perpendicular · 0.25′ / 5′${isSat ? '' : ' (satellites)'}</span>
       <div class="pad5">
-        <button aria-label="Perpendicular minus coarse" onClick=${() => apply({ cross_track_deg: cur.cross_track_deg - STEPS.perpCoarse })}>⇊</button>
-        <button aria-label="Perpendicular minus fine" onClick=${() => apply({ cross_track_deg: cur.cross_track_deg - STEPS.perpFine })}>↓</button>
-        <button class="zero" aria-label="Zero perpendicular" onClick=${() => apply({ cross_track_deg: 0 })}>0</button>
-        <button aria-label="Perpendicular plus fine" onClick=${() => apply({ cross_track_deg: cur.cross_track_deg + STEPS.perpFine })}>↑</button>
-        <button aria-label="Perpendicular plus coarse" onClick=${() => apply({ cross_track_deg: cur.cross_track_deg + STEPS.perpCoarse })}>⇈</button>
+        <button aria-label="Perpendicular minus coarse" onClick=${() => add({ cross_track_deg: -STEPS.perpCoarse })}>⇊</button>
+        <button aria-label="Perpendicular minus fine" onClick=${() => add({ cross_track_deg: -STEPS.perpFine })}>↓</button>
+        <button class="zero" aria-label="Zero perpendicular" onClick=${() => zero({ cross_track_deg: 0 })}>0</button>
+        <button aria-label="Perpendicular plus fine" onClick=${() => add({ cross_track_deg: STEPS.perpFine })}>↑</button>
+        <button aria-label="Perpendicular plus coarse" onClick=${() => add({ cross_track_deg: STEPS.perpCoarse })}>⇈</button>
       </div>
       <span class="mono">${(cur.cross_track_deg * 60).toFixed(2)}′</span>
     </div>
     <div class="group" style="flex:0 0 auto;align-items:center">
       <span class="small">Nudge az / el</span>
       <div class="pad3">
-        <span></span><button aria-label="Elevation up" onClick=${() => apply({ el_arcsec: cur.el_arcsec + nudge })}>↑</button><span></span>
-        <button aria-label="Azimuth minus" onClick=${() => apply({ az_arcsec: cur.az_arcsec - nudge })}>←</button>
-        <button class="zero" aria-label="Zero nudge" onClick=${() => apply({ az_arcsec: 0, el_arcsec: 0 })}>0</button>
-        <button aria-label="Azimuth plus" onClick=${() => apply({ az_arcsec: cur.az_arcsec + nudge })}>→</button>
-        <span></span><button aria-label="Elevation down" onClick=${() => apply({ el_arcsec: cur.el_arcsec - nudge })}>↓</button><span></span>
+        <span></span><button aria-label="Elevation up" onClick=${() => add({ el_arcsec: nudge })}>↑</button><span></span>
+        <button aria-label="Azimuth minus" onClick=${() => add({ az_arcsec: -nudge })}>←</button>
+        <button class="zero" aria-label="Zero nudge" onClick=${() => zero({ az_arcsec: 0, el_arcsec: 0 })}>0</button>
+        <button aria-label="Azimuth plus" onClick=${() => add({ az_arcsec: nudge })}>→</button>
+        <span></span><button aria-label="Elevation down" onClick=${() => add({ el_arcsec: -nudge })}>↓</button><span></span>
       </div>
       <${Select} aria-label="Nudge step" value=${nudge} onChange=${setNudge} options=${NUDGE_OPTS} />
       <span class="mono small">az ${cur.az_arcsec.toFixed(0)}″ · el ${cur.el_arcsec.toFixed(0)}″</span>
     </div>
     <div class="group">
       <div class="seg" role="group" aria-label="Camera loop">
-        <button disabled title="needs the camera service">Auto (camera loop)</button>
-        <button class="on" aria-pressed="true">Manual</button>
+        <button class=${auto ? 'on' : ''} aria-pressed=${auto} onClick=${() => setAuto(true)}
+          title=${`centroids from camera/${loop.camera || 'zwo'}/centroid correct the tracking (turn on Track ROI in the camera panel)`}>Auto (camera loop)</button>
+        <button class=${auto ? '' : 'on'} aria-pressed=${!auto} onClick=${() => setAuto(false)}>Manual</button>
       </div>
       <div class="grid2 mono">
-        <div class="readout"><span>Separation</span><span>—</span></div>
-        <div class="readout"><span>Tracking RMS</span><span>—</span></div>
+        <div class="readout"><span>Separation</span><span>${live ? `${Number(loop.err_arcsec || 0).toFixed(1)}″` : '—'}</span></div>
+        <div class="readout"><span>Loop</span><span>${auto ? `${loop.state || '…'} · ${loop.updates || 0}` : 'off'}</span></div>
       </div>
-      <span class="small">Separation and RMS come from the camera service.</span>
+      <span class="small" aria-label="Camera loop status">${auto ? `${loopState}${loop.corrects ? ` · corrects ${loop.corrects}` : ''}` : 'Manual: only the buttons change the offsets.'}${loop.note ? ` · ${loop.note}` : ''}</span>
+      <span class="small">Camera: ${Number(loop.arcsec_per_px || 0).toFixed(3)}″/px, x at ${Number(loop.rotation_deg || 0).toFixed(1)}° from +az${loop.flip ? ', mirrored' : ''} (${loop.geometry || 'config'})
+        <button class="btn small" disabled=${loop.state === 'calibrating'} onClick=${() => send('target', { calibrate_camera: {} })}
+          title="with the target locked: two small az/el moves measure the camera's orientation and scale">${loop.state === 'calibrating' ? 'Calibrating…' : 'Calibrate'}</button>
+        ${calibrated && html`<button class="btn small" onClick=${() => send('target', { calibrate_camera: { reset: true } })}
+          title="forget the calibration: back to the system file's geometry">Reset</button>`}</span>
     </div>
   </section>`;
 }

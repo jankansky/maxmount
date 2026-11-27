@@ -70,8 +70,12 @@ class Plan:
 
     def mech(self, t_ns):
         """Commanded axis angles at arbitrary times within (or near) the plan."""
+        return self.mech_with(self._target, t_ns)
+
+    def mech_with(self, target: Target, t_ns):
+        """As mech, for another version of the target (e.g. with different TLE corrections)."""
         t = np.atleast_1d(np.asarray(t_ns, dtype=np.int64))
-        a, e, _ = _mech_raw(self.mode, self._target, t, self._a0)
+        a, e, _ = _mech_raw(self.mode, target, t, self._a0)
         a, e = self._model.apply(a, e) if self._model else (a, e)
         # Put each azimuth on the same 2*pi branch as the planned (unwrapped) path.
         ref = np.interp(t.astype(float), self.t_ns.astype(float), self.a)

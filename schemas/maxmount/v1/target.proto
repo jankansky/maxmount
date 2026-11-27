@@ -67,6 +67,20 @@ message JogAxis {
   double acc_deg_s2 = 6;        // 0 = 2 deg/s^2; capped by the axis limit
 }
 
+// The camera loop (closed_loop in the system file): centroids from camera/<camera>/centroid
+// drive the offsets (satellites: time and cross-track; others: az/el axis offsets).
+message ClosedLoop {
+  bool on = 1;
+}
+
+// Measures the camera's orientation and scale relative to the mount axes: with the target
+// locked, the boresight steps step_arcsec in cross-elevation and then in elevation and the
+// target's shifts on the sensor give the mapping. Saved for later sessions. Pauses the loop.
+message CalibrateCamera {
+  double step_arcsec = 1;       // 0 = closed_loop.calibrate_step_arcsec (0 there: max_step_px on the sensor)
+  bool reset = 2;               // forget the calibration (back to the configured geometry)
+}
+
 message TargetCommand {
   oneof command {
     RaDec track_radec = 1;
@@ -76,6 +90,9 @@ message TargetCommand {
     Stop stop = 5;
     JogAxis jog_axis = 6;
     TrackAircraft track_aircraft = 7;
+    ClosedLoop closed_loop = 8;
+    CalibrateCamera calibrate_camera = 9;
+    Offsets add_offsets = 11;   // added to the current offsets (hand buttons while the loop runs)
   }
   bool allow_clock_error = 10;  // satellites: track even if chrony's error bound is too large
 }
@@ -157,6 +174,26 @@ message ServiceStatus {
   string tle_line1 = 23;        // satellite targets: the element set in use
   string tle_line2 = 24;
   string aircraft_icao = 25;    // the tracked aircraft (target_kind aircraft)
+  LoopStatus loop = 26;
+}
+
+message LoopStatus {
+  bool on = 1;
+  string state = 2;             // off | waiting (no fresh lock) | correcting | settling | calibrating
+  string note = 3;              // last event, e.g. why the loop opened
+  string camera = 4;
+  uint32 updates = 5;
+  double err_x_arcsec = 6;      // last measured boresight error, cross-elevation (axis frame)
+  double err_y_arcsec = 7;      // elevation
+  double err_arcsec = 8;
+  int64 err_t_ns = 9;
+  string corrects = 10;         // e.g. "time, cross-track" or "az, el"
+  // Camera geometry in use.
+  double arcsec_per_px = 11;
+  double rotation_deg = 12;
+  bool flip = 13;
+  string geometry = 14;         // config | calibrated <UTC time>
+  double centroid_age_s = 15;   // < 0: none yet
 }
 
 message SkyPoint {

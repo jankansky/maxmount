@@ -68,6 +68,24 @@ def test_main_screen(gui_url):
         page.get_by_role("button", name="Go").click()
         page.wait_for_function("() => document.querySelector('[aria-label=Target] .lcd').textContent.includes('az 15.00')", timeout=15000)
 
+        # Corrections: nudges add to the offsets; Auto turns the camera loop on (it waits for a
+        # camera centroid; none in this test) and Manual off again.
+        page.get_by_role("button", name="Elevation up").click()
+        page.get_by_role("button", name="Elevation up").click()
+        page.wait_for_function("() => document.querySelector('.corr').textContent.includes('el 20″')", timeout=10000)
+        page.get_by_role("button", name="Zero nudge").click()
+        page.wait_for_function("() => document.querySelector('.corr').textContent.includes('el 0″')", timeout=10000)
+        page.get_by_role("button", name="Auto (camera loop)").click()
+        status = page.get_by_label("Camera loop status")
+        page.wait_for_function("() => document.querySelector('[aria-label=\"Camera loop status\"]').textContent.includes('waiting for a locked zwo centroid')", timeout=10000)
+        assert page.get_by_role("button", name="Auto (camera loop)").get_attribute("aria-pressed") == "true"
+        assert "0.573″/px" in page.locator(".corr").text_content() and "(config)" in page.locator(".corr").text_content()
+        page.get_by_role("button", name="Calibrate").click()
+        page.wait_for_function("() => document.querySelector('.statusline').textContent.includes('calibrating needs')", timeout=10000)
+        page.get_by_role("button", name="Manual").click()
+        page.wait_for_function("() => document.querySelector('[aria-label=\"Camera loop status\"]').textContent.includes('Manual')", timeout=10000)
+        assert status.is_visible()
+
         # The imaging profile picker (sim-altaz: the one default profile) and its pixel scale.
         assert page.get_by_label("Imaging profile").is_visible()
         assert "0.57″/px" in page.locator("label.imaging").text_content()

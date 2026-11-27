@@ -127,6 +127,24 @@ cameras:
     roi_latency_frames: 2     # ROI tracking: frames still read at the old ROI position after a move
                               # (to be measured on the real camera)
 
+# Camera loop (mount-svc serve): the narrow-field camera's ROI-tracking centroids
+# (camera/<camera>/centroid) become tracking corrections: time and cross-track offsets for
+# satellites, axis offsets for other targets. Turned on in the GUI (Corrections: Auto).
+# The geometry below is the starting guess; Calibrate in the GUI measures the real one (two
+# small axis moves while the target is locked) and keeps it in ~/.local/state/maxmount/.
+closed_loop:
+  camera: zwo
+  rotation_deg: 0           # sensor +x from the +azimuth direction, towards +elevation
+  flip: false               # true if the image is mirrored
+  arcsec_per_px: 0          # 0 = from the imaging profile whose camera_service is the camera
+  gain: 0.5                 # fraction of the measured error corrected per update
+  settle_s: 0.6             # wait after a correction before measuring again
+  avg_s: 0.25               # centroids averaged per update
+  max_step_arcsec: 120      # largest single correction
+  max_total_arcsec: 600     # the loop opens if its corrections add up to more (locked on the wrong object?)
+  max_step_px: 20           # largest image move per correction (the ROI tracker must not lose the target)
+  calibrate_step_arcsec: 0  # the calibration's axis moves; 0 = max_step_px on the sensor
+
 # ADS-B aircraft positions (Passes screen, Aircraft tab; track_aircraft) from a local
 # 1090 MHz receiver: readsb or dump1090 writing aircraft.json. Nothing is fetched from the internet.
 adsb:

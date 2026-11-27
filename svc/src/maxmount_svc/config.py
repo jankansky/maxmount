@@ -75,6 +75,34 @@ class ZwoSettings:
     record_buffer_mb: float = 512.0   # SER recording: frames queued in RAM while the card catches up
     record_min_free_mb: float = 2048.0  # SER recording stops when the disk has less free space than this
     roi_latency_frames: float = 2.0   # ROI tracking: frames still read at the old position after a move
+    # Simulator only: the "true" errors the camera loop has to find (the sim draws the target
+    # where it really is relative to where the mount points) and how the sensor really sits.
+    sim_time_error_s: float = 0.12        # satellites: along-track (TLE) error
+    sim_cross_track_arcsec: float = 25.0  # satellites: cross-track error
+    sim_az_error_arcsec: float = 40.0     # every target: pointing error (on the sky)
+    sim_el_error_arcsec: float = -25.0
+    sim_rotation_deg: float = 20.0        # sensor +x from +azimuth (see closedloop.CameraGeometry)
+    sim_flip: float = 0.0                 # 1 = mirrored
+    sim_arcsec_per_px: float = 0.38       # ASI224MC (3.75 um) at 2032 mm
+
+
+@dataclass
+class ClosedLoopSettings:
+    """mount-svc's camera loop (system file `closed_loop:`): centroids from camera/<camera>/
+    centroid become tracking corrections. The geometry here is the starting guess; a
+    calibration in the GUI measures and remembers the real one."""
+    camera: str = "zwo"
+    rotation_deg: float = 0.0     # sensor +x from the +azimuth direction, towards +elevation
+    flip: bool = False
+    arcsec_per_px: float = 0.0    # 0 = from the imaging profile used by this camera
+    gain: float = 0.5
+    settle_s: float = 0.6
+    avg_s: float = 0.25
+    min_snr: float = 8.0
+    max_step_arcsec: float = 120.0
+    max_total_arcsec: float = 600.0
+    max_step_px: float = 20.0
+    calibrate_step_arcsec: float = 0.0  # 0 = max_step_px on the sensor
 
 
 @dataclass
@@ -185,6 +213,19 @@ class SystemSettings:
     imaging: ImagingSettings = field(default_factory=ImagingSettings)
     dslr: DslrSettings = field(default_factory=DslrSettings)
     zwo: ZwoSettings = field(default_factory=ZwoSettings)
+    closed_loop: ClosedLoopSettings = field(default_factory=ClosedLoopSettings)
+
+    def loop_arcsec_per_px(self) -> float:
+        """The camera loop's starting pixel scale: configured, or the imaging profile of the
+        loop's camera (the default profile first), else a C8 at f/10 with 3.75 um pixels."""
+        if self.closed_loop.arcsec_per_px > 0:
+            return self.closed_loop.arcsec_per_px
+        im = self.imaging
+        cands = [im.profiles[im.default]] + list(im.profiles.values())
+        for p in cands:
+            if p.camera_service == self.closed_loop.camera:
+                return p.arcsec_per_px
+        return 0.38
 
 
 class ConfigError(RuntimeError):
@@ -231,6 +272,14 @@ def _axes_info(doc: dict, drives_dir: Path) -> list[dict]:
             pass
         out.append(info)
     return out
+
+
+def _closed_loop(d: dict) -> ClosedLoopSettings:
+    try:
+        return ClosedLoopSettings(**{k: (str(v) if k == "camera" else bool(v) if k == "flip" else float(v))
+                                     for k, v in d.items() if k in ClosedLoopSettings.__dataclass_fields__})
+    except (TypeError, ValueError) as e:
+        raise ConfigError(f"closed_loop: {e}") from None
 
 
 def load_system(path: str | Path) -> SystemSettings:
@@ -304,8 +353,9 @@ def load_system(path: str | Path) -> SystemSettings:
         imaging=_imaging(doc),
         dslr=DslrSettings(**{k: (float(v) if k == "liveview_fps" else str(v))
                              for k, v in ((doc.get("cameras") or {}).get("dslr") or {}).items() if k in DslrSettings.__dataclass_fields__}),
-        zwo=ZwoSettings(**{k: (float(v) if k in ("liveview_fps", "record_buffer_mb", "record_min_free_mb", "roi_latency_frames") else str(v))
+        zwo=ZwoSettings(**{k: (str(v) if k in ("backend", "sdk_lib", "data_dir") else float(v))
                            for k, v in ((doc.get("cameras") or {}).get("zwo") or {}).items() if k in ZwoSettings.__dataclass_fields__}),
+        closed_loop=_closed_loop(doc.get("closed_loop") or {}),
         adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
                              for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),
     )

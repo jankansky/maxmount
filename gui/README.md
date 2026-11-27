@@ -126,7 +126,11 @@ it, **Drives** (`#drives`).
     target's offset, SNR and speed; Center ROI puts the ROI back in the middle;
     histogram and statistics as for the D500;
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
-    `mount-svc` offsets.
+    `mount-svc` offsets (the steps add to the current offsets, so they work alongside the
+    camera loop); Auto / Manual switches the camera loop (needs Track ROI in the ZWO panel),
+    with the separation it measures, its state and what it corrects; Calibrate measures the
+    camera's orientation and scale (two small az/el moves while the target is locked), Reset
+    forgets it.
 - **Right column:**
   - sky dome (north up, east left; horizon mask, keyhole, planned track, target, mount, Sun)
     and the live target's ground track with visibility circle and night side;
