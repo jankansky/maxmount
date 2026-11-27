@@ -3,6 +3,7 @@
 gateway) driven by headless Chromium. Fails on any JavaScript error. Skipped unless Playwright
 and its Chromium are installed (pip install playwright && playwright install chromium)."""
 import asyncio
+import os
 import random
 import threading
 
@@ -564,4 +565,63 @@ def test_closed_loop_and_centroid_chart(gui_url, served, tmp_path):  # noqa: F81
             cam.close()
             backend.close()
             sky.close()
+    assert not errors, errors
+
+
+@pytest.fixture
+def adsb_file(served, tmp_path):  # noqa: F811
+    """Simulated aircraft.json that mount-svc and the gateway both read (request before gui_url)."""
+    from maxmount_svc import adsb
+
+    _client, settings = served
+    path = tmp_path / "aircraft.json"
+    settings.adsb.source = str(path)
+    stop = threading.Event()
+    sim = threading.Thread(target=adsb.run_simulator, args=(settings.site, str(path)),
+                           kwargs={"n": 12, "period_s": 0.5, "stop": stop.is_set}, daemon=True)
+    sim.start()
+    try:
+        yield path
+    finally:
+        stop.set()
+
+
+def test_track_screen_sky_and_ground(adsb_file, gui_url, tmp_path):
+    """The track screen always shows the Sky (top left) and the Ground track (top right); with
+    an aircraft as the target the ground view shows its trail and predicted path."""
+    errors = []
+    with playwright.sync_playwright() as pw:
+        try:
+            browser = pw.chromium.launch()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no Chromium for Playwright: {e}")
+        page = browser.new_page(viewport={"width": 1600, "height": 1000})
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.goto(gui_url)
+        sky, ground = page.locator("[aria-label='Sky now']"), page.locator("[aria-label='Ground now']")
+        assert sky.is_visible() and ground.is_visible()
+        sb, gb = sky.bounding_box(), ground.bounding_box()
+        assert sb["x"] < gb["x"] and abs(sb["y"] - gb["y"]) < 5  # side by side along the top
+        ground.get_by_text("Shows the ground track when").wait_for(timeout=5000)
+
+        page.goto(gui_url + "#passes")
+        page.get_by_role("tab", name="Aircraft (ADS-B)").first.click()
+        panel = page.locator("[aria-label=Aircraft]")
+        panel.get_by_label("Aircraft range").select_option("200")
+        buttons = panel.locator("tbody button:not([disabled])", has_text="Track")
+        buttons.first.wait_for(timeout=15000)
+        for i in range(min(8, buttons.count())):  # some pass too near the Sun for the real clock
+            buttons.nth(i).click()
+            page.wait_for_timeout(1500)
+            if "active" in panel.locator("tbody").text_content():
+                break
+        else:
+            pytest.skip("every simulated aircraft passes too near the Sun right now")
+        page.goto(gui_url)
+        ground.get_by_text("tracked aircraft: trail").wait_for(timeout=10000)
+        assert "km" in ground.locator(".head").text_content()
+        page.wait_for_timeout(2500)
+        page.screenshot(path=os.environ.get("MAXMOUNT_SHOT", str(tmp_path / "track-aircraft.png")))
+        browser.close()
     assert not errors, errors

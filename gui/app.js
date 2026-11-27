@@ -894,35 +894,74 @@ function Conjunctions({ hello, send, status, connected, preview, setConjPreview,
   </section>`;
 }
 
-function SkyPanel({ status, tel, hello, track, land }) {
-  const [view, setView] = useState(loadPref('skyview', 'sky'));
+// Track screen: the sky dome (top left) and the ground view (top right), both always shown.
+function SkyNow({ status, tel, hello, air }) {
   const ref = useRef(null);
   useEffect(() => {
-    const c = ref.current;
-    if (!c) return;
-    if (view === 'sky') {
-      drawSky(c, {
-        maskEl: hello?.tracking?.horizon_min_el_deg ?? 10,
-        path: (status?.path || []).map((p) => [Number(p.az_deg), Number(p.el_deg)]),
-        target: status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
-        mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
-        sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
-      });
+    if (!ref.current) return;
+    const sel = air?.selected;
+    drawSky(ref.current, {
+      maskEl: hello?.tracking?.horizon_min_el_deg ?? 10,
+      path: (status?.path || []).map((p) => [Number(p.az_deg), Number(p.el_deg)]),
+      target: status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
+      mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
+      sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
+      ...(air ? { points: air.aircraft.map((a) => ({ az: a.az_deg, el: a.el_deg, label: a.label, sel: a.icao === air.sel })),
+        preview: sel?.sky || null, labels: ['', '+10 min'] } : {}),
+    });
+  });
+  return html`<section class="panel" aria-label="Sky now">
+    <div class="head"><h2>Sky</h2></div>
+    <canvas ref=${ref} role="img" aria-label="Sky dome: mount, target, planned track, horizon mask"></canvas>
+    <span class="small">North up, east left · dashed: planned track · ring: mount · dot: target${air ? ' · aircraft: dots, the tracked one\'s next 10 min' : ''}</span>
+  </section>`;
+}
+
+// The aircraft view's radius: the ring that holds the tracked aircraft with some margin.
+const airRadius = (a) => [10, 25, 50, 100, 200].find((r) => r >= 1.3 * (a?.horiz_km ?? 0)) ?? 200;
+
+function GroundNow({ status, track, land, air }) {
+  const ref = useRef(null);
+  const sel = air && air.aircraft.find((a) => a.icao === air.sel);
+  useEffect(() => {
+    if (!ref.current) return;
+    if (air) {
+      drawMap(ref.current, { land, now: new Date(), air: { site: air.site, radius_km: airRadius(sel),
+        items: air.aircraft.map((a) => ({ lon: a.lon, lat: a.lat, track_deg: a.track_deg, label: a.label, sel: a.icao === air.sel })),
+        trail: air.selected?.trail, path: air.selected?.path } });
     } else {
-      drawMap(c, { land, track: status?.tle_line1 ? track : null });
+      drawMap(ref.current, { land, track: status?.tle_line1 ? track : null });
     }
   });
-  const pick = (v) => { setView(v); savePref('skyview', v); };
-  return html`<section class="panel">
-    <div class="tabs" role="tablist">
-      <button role="tab" class=${view === 'sky' ? 'on' : ''} aria-selected=${view === 'sky'} onClick=${() => pick('sky')}>Sky</button>
-      <button role="tab" class=${view === 'map' ? 'on' : ''} aria-selected=${view === 'map'} onClick=${() => pick('map')}>Ground track</button>
-    </div>
-    <canvas ref=${ref} role="img" aria-label=${view === 'sky' ? 'Sky dome: mount, target, planned track, horizon mask' : 'World map: satellite ground track and visibility circle'}></canvas>
-    <span class="small">${view === 'sky'
-      ? 'North up, east left · dashed: planned track · ring: mount · dot: target'
-      : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask' : 'Ground track shows when the target is a satellite (choose one on the Passes screen).'}</span>
+  const aircraft = status?.target_kind === 'aircraft';
+  return html`<section class="panel" aria-label="Ground now">
+    <div class="head"><h2>Ground track</h2><span class="small">${air ? `within ${airRadius(sel)} km` : status?.tle_line1 ? 'live' : ''}</span></div>
+    <canvas ref=${ref} role="img" aria-label="Map: ground track of the target, site"></canvas>
+    <span class="small">${air ? 'tracked aircraft: trail (solid) and the next 10 min if it flies straight (dashed) · triangle: site'
+      : aircraft ? 'Waiting for ADS-B data on the tracked aircraft…'
+      : status?.tle_line1 ? 'solid: flown · dashed: next 50 min · circle: visible above the horizon mask'
+      : 'Shows the ground track when the target is a satellite or an aircraft.'}</span>
   </section>`;
+}
+
+// While an aircraft is the target and the track screen is up: the tracked aircraft's trail and
+// predicted path (and the other aircraft nearby) from the gateway, every 2 s.
+function useTrackedAircraft(ask, status, active) {
+  const [air, setAir] = useState(null);
+  const icao = status?.target_kind === 'aircraft' ? status.aircraft_icao : '';
+  useEffect(() => {
+    setAir(null);
+    if (!active || !icao) return undefined;
+    let live = true;
+    const poll = async () => {
+      const r = await ask('aircraft', { max_range_km: 200, show: 'up', selected: icao });
+      if (live && r.ok && r.data?.selected) setAir({ ...r.data, sel: icao });
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => { live = false; clearInterval(id); };
+  }, [active, icao]);
+  return air;
 }
 
 // Passes screen: large ground track and sky views of the selected pass (or the live target).
@@ -1200,6 +1239,7 @@ function App() {
   const setListTab = (t) => { setListTabState(t); savePref('listtab', t); setPreviewState(null); previewReq.current = null; };
   const updatePreviewRow = useCallback((row) => setPreviewState((pv) => (pv && pv.key === passKey(row) ? { ...pv, row } : pv)), []);
   const openDialog = () => dialogRef.current?.showModal();
+  const trackAir = useTrackedAircraft(ask, status, connected && screen === 'track');
 
   return html`
     <${Header} theme=${theme} setTheme=${setTheme} line=${line} status=${status} tel=${tel} hello=${hello} connected=${connected}
@@ -1227,6 +1267,7 @@ function App() {
     </div>
     <div class="layout" hidden=${screen !== 'track'}>
       <aside class="col-left">
+        <${SkyNow} status=${status} tel=${tel} hello=${hello} air=${trackAir} />
         <${MountPanel} tel=${tel} act=${act} />
         <${TargetCard} status=${status} openDialog=${openDialog} now=${now} />
       </aside>
@@ -1243,7 +1284,7 @@ function App() {
         <${Corrections} status=${status} send=${send} />
       </main>
       <aside class="col-right">
-        <${SkyPanel} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} />
+        <${GroundNow} status=${status} track=${track} land=${land} air=${trackAir} />
         <${TelemetryPanel} status=${status} history=${history.current} now=${now} />
       </aside>
     </div>

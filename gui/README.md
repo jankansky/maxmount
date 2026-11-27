@@ -99,6 +99,9 @@ it, **Drives** (`#drives`).
 ## The Track screen
 
 - **Left column:**
+  - sky dome (top left; north up, east left; horizon mask, keyhole, planned track, target,
+    mount, Sun; with an aircraft as the target, the aircraft up now and the tracked one's next
+    10 minutes if it flies straight);
   - mount position (az/el, RA/Dec and LST computed by the gateway, UTC);
   - drive and trip indicators;
   - **STOP:** quick stop sent straight to `mount-rt`, then the target is cleared;
@@ -136,8 +139,9 @@ it, **Drives** (`#drives`).
     the loop's camera geometry, open or closed loop (the gateway forwards
     `camera/*/centroid` at up to 10 Hz).
 - **Right column:**
-  - sky dome (north up, east left; horizon mask, keyhole, planned track, target, mount, Sun)
-    and the live target's ground track with visibility circle and night side;
+  - ground track (top right): for a satellite, its track with the visibility circle and night
+    side; for an aircraft, a map around the site with its trail and next 10 minutes (from the
+    gateway's `aircraft` request every 2 s while the Track screen is open);
   - target telemetry (rates, range, range rate, altitude, TLE age);
   - strip charts with grid lines: following error, and loop wake-up latency.
 
