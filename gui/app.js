@@ -784,8 +784,10 @@ function Conjunctions({ hello, send, status, connected, preview, setConjPreview,
   };
   // Search when the tab is first opened and whenever a selector changes.
   useEffect(() => { if (connected && tab === 'conj') refresh(); }, [connected, tab === 'conj', hours, maxRange, lighting, maxMag, coorb]);
+  // A preview that fails says why here (the map and sky view go blank).
+  const failed = (c) => (m) => setNote(`${conjName(c.name1)} × ${conjName(c.name2)}: ${m}`);
   const track = async (c) => {
-    const d = preview?.key === conjKey(c) ? preview : await setConjPreview(c);
+    const d = preview?.key === conjKey(c) ? preview : await setConjPreview(c, failed(c));
     if (!d) return;
     const p = d.row;
     setNote(`planning ${p.name} through the conjunction…`);
@@ -819,7 +821,7 @@ function Conjunctions({ hello, send, status, connected, preview, setConjPreview,
           <br /><span class="muted">Try a longer window, a larger miss distance or Lighting: any.</span>`}</td></tr>`}
         ${rows.map((c) => {
           const key = conjKey(c), sel = preview?.key === key;
-          const pick = () => setConjPreview(sel ? null : c);
+          const pick = () => (sel ? setConjPreview(null) : setConjPreview(c, failed(c)));
           return html`<tr class=${sel ? 'selected' : ''} tabindex="0" aria-selected=${sel} onClick=${pick}
             onKeyDown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}>
             <td>${utc(c.tca_ns)}</td>
@@ -1119,11 +1121,12 @@ function App() {
   }, [send]);
   // A conjunction preview: both objects' paths through the tracked object's pass. Returns the
   // preview (Track uses its pass), or null.
-  const setConjPreview = useCallback(async (c) => {
+  const setConjPreview = useCallback(async (c, onFail) => {
     previewReq.current = c ? conjKey(c) : null;
     if (!c) { setPreviewState(null); return null; }
     const r = await send('conjunction_detail', { cat1: c.cat1, cat2: c.cat2, primary: c.primary, tca_ns: c.tca_ns });
     if (previewReq.current !== conjKey(c)) return null;
+    if (!r.ok && onFail) onFail(r.message);
     const pv = r.ok ? { key: conjKey(c), kind: 'conj', conj: c, ...r.data, row: r.data.pass } : null;
     setPreviewState(pv);
     return pv;
