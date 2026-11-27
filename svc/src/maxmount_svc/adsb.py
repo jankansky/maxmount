@@ -210,10 +210,14 @@ def closest_approach(target: AircraftTarget, t0_ns: int, horizon_s: float = 900,
 
 
 # -- simulator ---------------------------------------------------------------------------------
+SIM_SEEN_POS_S = 0.2  # age of each simulated position when the file is written
+
+
 def simulate(site, t_s: float, n: int = 8, seed: int = 1) -> dict:
     """aircraft.json at time t_s with n synthetic aircraft on straight lines passing near the
-    site (deterministic for a seed). Each passes the site every 20 minutes (from 10 min before
-    its closest approach to 10 min after, then repeats)."""
+    site (deterministic for a seed), 1.5-11.5 km above the site (not sea level: a high site
+    would otherwise have aircraft at its own height). Each passes the site every 20 minutes
+    (from 10 min before its closest approach to 10 min after, then repeats)."""
     rng = np.random.default_rng(seed)
     lat0, lon0 = math.radians(site.latitude_deg), math.radians(site.longitude_deg)
     out = []
@@ -221,10 +225,11 @@ def simulate(site, t_s: float, n: int = 8, seed: int = 1) -> dict:
         heading = rng.uniform(0, 360)
         miss = rng.uniform(-15000, 15000)              # closest approach distance, m
         speed = rng.uniform(110, 250)                  # m/s
-        alt = rng.uniform(1500, 11500)                 # m
+        alt = site.height_m + rng.uniform(1500, 11500)  # m above the ellipsoid
         vrate = rng.choice([0.0, 0.0, 6.0, -6.0])
         phase = rng.uniform(0, 1200)
-        tt = (t_s + phase) % 1200 - 600                # s from closest approach: -10..+10 min
+        # The position is reported SEEN_POS old, as readsb does: computed for then, not now.
+        tt = (t_s - SIM_SEEN_POS_S + phase) % 1200 - 600  # s from closest approach: -10..+10 min
         h = math.radians(heading)
         # Local east/north offset from the site: along-track + perpendicular miss.
         e = math.sin(h) * speed * tt + math.cos(h) * miss
@@ -235,7 +240,7 @@ def simulate(site, t_s: float, n: int = 8, seed: int = 1) -> dict:
             "hex": f"a{i:05x}", "flight": f"SIM{100 + i:<5}", "lat": round(math.degrees(lat), 6),
             "lon": round(math.degrees(lon), 6), "alt_geom": round((alt + vrate * tt) / FT),
             "alt_baro": round((alt + vrate * tt) / FT) - 150, "gs": round(speed / KT, 1), "track": round(heading, 1),
-            "geom_rate": round(vrate / FT * 60), "seen_pos": 0.2, "seen": 0.1, "category": "A3",
+            "geom_rate": round(vrate / FT * 60), "seen_pos": SIM_SEEN_POS_S, "seen": 0.1, "category": "A3",
             "t": "A320", "r": f"N{100 + i}SM", "squawk": f"{1200 + i}",
         })
     return {"now": t_s, "messages": int(t_s), "aircraft": out}

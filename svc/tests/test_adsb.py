@@ -84,6 +84,15 @@ def test_simulator_round_trips(site, tmp_path):
     doc = adsb.simulate(site, 1_000_000.0, n=6)
     d = adsb.parse(json.loads(json.dumps(doc)))
     assert len(d) == 6 and all(a.alt_source == "geom" and a.type == "A320" for a in d.values())
+    # Altitudes are above the site (a high site: not at its own height), so at closest approach
+    # every aircraft is well up in the sky.
+    for a in d.values():
+        assert a.alt_m - site.height_m > 1000
+    for t in np.arange(0, 1200, 60.0):
+        for a in adsb.parse(adsb.simulate(site, 1_000_000.0 + t, n=6)).values():
+            enu = adsb.AircraftTarget(site, a).enu_m(np.array([a.t_pos_ns], dtype=np.int64))[0]
+            if np.hypot(enu[0], enu[1]) < 15000:
+                assert enu[2] > 1000
     # Deterministic for a seed, and each aircraft moves in a straight line.
     later = adsb.parse(adsb.simulate(site, 1_000_010.0, n=6))
     a, b = d["a00000"], later["a00000"]
@@ -99,6 +108,29 @@ def test_simulator_round_trips(site, tmp_path):
     assert len(src.aircraft()) == 6 and src.ok
     path.write_text(json.dumps(adsb.simulate(site, t + 1, n=6)))
     assert len(src.get("A00000").trail) == 2
+
+
+def test_simulated_positions_are_for_their_reported_time(site):
+    """Each simulated position is where the aircraft was seen_pos before the file's time (as
+    readsb reports it): an independent reconstruction of the straight-line flight from the same
+    random parameters matches to a metre. (Positions computed for "now" but reported 0.2 s old
+    made the mount lead every aircraft by 0.2 s.)"""
+    t_s = 1_000_000.0
+    doc = adsb.simulate(site, t_s, n=3)
+    rng = np.random.default_rng(1)
+    for i, a in enumerate(adsb.parse(doc).values()):
+        heading, miss, speed = rng.uniform(0, 360), rng.uniform(-15000, 15000), rng.uniform(110, 250)
+        rng.uniform(1500, 11500), rng.choice([0.0, 0.0, 6.0, -6.0])
+        phase = rng.uniform(0, 1200)
+        tt = (a.t_pos_ns / 1e9 + phase) % 1200 - 600
+        h = math.radians(heading)
+        e = math.sin(h) * speed * tt + math.cos(h) * miss
+        n = math.cos(h) * speed * tt - math.sin(h) * miss
+        lat0 = math.radians(site.latitude_deg)
+        assert a.t_pos_ns / 1e9 == pytest.approx(t_s - adsb.SIM_SEEN_POS_S)
+        # 1e-6 deg is ~0.1 m; 0.2 s of flight is 20-50 m.
+        assert a.lat_deg == pytest.approx(site.latitude_deg + math.degrees(n / 6378137.0), abs=2e-6), i
+        assert a.lon_deg == pytest.approx(site.longitude_deg + math.degrees(e / (6378137.0 * math.cos(lat0))), abs=2e-6), i
 
 
 def test_mount_svc_tracks_an_aircraft_and_holds_when_the_feed_stops(served, tmp_path):  # noqa: F811
