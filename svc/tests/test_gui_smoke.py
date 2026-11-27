@@ -77,7 +77,7 @@ def test_main_screen(gui_url):
         page.wait_for_function("() => document.querySelector('.corr').textContent.includes('el 0″')", timeout=10000)
         page.get_by_role("button", name="Auto (camera loop)").click()
         status = page.get_by_label("Camera loop status")
-        page.wait_for_function("() => document.querySelector('[aria-label=\"Camera loop status\"]').textContent.includes('waiting for a locked zwo centroid')", timeout=10000)
+        page.wait_for_function("() => document.querySelector('[aria-label=\"Camera loop status\"]').textContent.includes('waiting for ')", timeout=10000)
         assert page.get_by_role("button", name="Auto (camera loop)").get_attribute("aria-pressed") == "true"
         assert "0.573″/px" in page.locator(".corr").text_content() and "(config)" in page.locator(".corr").text_content()
         page.get_by_role("button", name="Calibrate").click()

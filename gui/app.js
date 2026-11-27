@@ -454,7 +454,12 @@ function Corrections({ status, send }) {
   const setAuto = (on) => send('target', { closed_loop: { on } });
   const live = auto && (loop.state === 'correcting' || loop.state === 'settling');
   const calibrated = String(loop.geometry || '').startsWith('calibrated');
-  const loopState = loop.state === 'waiting' ? `waiting for a locked ${loop.camera || 'camera'} centroid` : (loop.state || 'off');
+  // Say which condition the loop waits for: the mount tracking, or the camera's centroids.
+  const mountTracking = status?.state === 'SERVICE_STATE_TRACKING';
+  const fresh = loop.centroid_age_s >= 0 && loop.centroid_age_s < 1;
+  const loopState = loop.state !== 'waiting' ? (loop.state || 'off')
+    : !mountTracking ? `waiting for the mount to track a target (now: ${STATE[status?.state] || status?.state || '—'})`
+    : !fresh ? `waiting for a locked ${loop.camera || 'camera'} centroid (Track ROI)` : 'waiting';
   return html`<section class="panel corr" aria-label="Corrections">
     <div class="group">
       <span class="small">Timing along the path · ${STEPS.timeFine} s / ${STEPS.timeCoarse} s${isSat ? '' : ' (satellites)'}</span>

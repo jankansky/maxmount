@@ -548,7 +548,9 @@ class MountService:
                 self._geom = self._config_geometry()
             return mpb.TargetReply(accepted=True, message="camera geometry: back to the system file's")
         if self._loop_target() is None:
-            raise Rejected("calibrating needs a target being tracked with the camera locked on it")
+            with self._lock:
+                state, msg = self._state, self._message
+            raise Rejected(f"calibrating needs the mount tracking a target; it is {state}" + (f" ({msg})" if msg else ""))
         with self._loop_lock:
             if self._calibrating:
                 raise Rejected("already calibrating")
