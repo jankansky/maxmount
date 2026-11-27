@@ -641,7 +641,8 @@ class MountService:
                 err_x_arcsec=float(st.err[0]) / ARCSEC, err_y_arcsec=float(st.err[1]) / ARCSEC,
                 err_arcsec=float(np.hypot(*st.err)) / ARCSEC, err_t_ns=st.t_err_ns, corrects=self._corrects,
                 arcsec_per_px=g["arcsec_per_px"], rotation_deg=g["rotation_deg"], flip=g["flip"], geometry=g["source"],
-                centroid_age_s=(now - self._last_centroid_ns) / NS if self._last_centroid_ns else -1.0)
+                centroid_age_s=(now - self._last_centroid_ns) / NS if self._last_centroid_ns else -1.0,
+                m_arcsec_per_px=[float(v) / ARCSEC for v in self._geom.m.flatten()])
         return out
 
     def _stop(self, keep_enabled: bool) -> mpb.TargetReply:

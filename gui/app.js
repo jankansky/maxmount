@@ -496,22 +496,57 @@ function Corrections({ status, send }) {
       <span class="mono small">az ${cur.az_arcsec.toFixed(0)}″ · el ${cur.el_arcsec.toFixed(0)}″</span>
     </div>
     <div class="group">
-      <div class="seg" role="group" aria-label="Camera loop">
-        <button class=${auto ? 'on' : ''} aria-pressed=${auto} onClick=${() => setAuto(true)}
-          title=${`centroids from camera/${loop.camera || 'zwo'}/centroid correct the tracking (turn on Track ROI in the camera panel)`}>Auto (camera loop)</button>
-        <button class=${auto ? '' : 'on'} aria-pressed=${!auto} onClick=${() => setAuto(false)}>Manual</button>
+      <div class="loopctl" role="group" aria-label="Camera loop">
+        <button class=${'btn' + (auto ? '' : ' on')} aria-pressed=${!auto} onClick=${() => setAuto(false)}
+          title="the mount follows the prediction plus the offsets; only the buttons change them">Open loop</button>
+        <button class=${'btn' + (auto ? ' on' : '')} aria-pressed=${auto} onClick=${() => setAuto(true)}
+          title=${`centroids from camera/${loop.camera || 'zwo'}/centroid correct the tracking (turn on Track ROI in the camera panel)`}>Close loop</button>
+        <span class=${'chip mono ' + (live ? 'ok' : auto ? 'warn' : '')} aria-label="Loop state">${!auto ? 'OPEN' : live ? 'CLOSED' : 'CLOSING'}</span>
       </div>
       <div class="grid2 mono">
         <div class="readout"><span>Separation</span><span>${live ? `${Number(loop.err_arcsec || 0).toFixed(1)}″` : '—'}</span></div>
         <div class="readout"><span>Loop</span><span>${auto ? `${loop.state || '…'} · ${loop.updates || 0}` : 'off'}</span></div>
       </div>
-      <span class="small" aria-label="Camera loop status">${auto ? `${loopState}${loop.corrects ? ` · corrects ${loop.corrects}` : ''}` : 'Manual: only the buttons change the offsets.'}${loop.note ? ` · ${loop.note}` : ''}</span>
+      <span class="small" aria-label="Camera loop status">${auto ? `${loopState}${loop.corrects ? ` · corrects ${loop.corrects}` : ''}` : 'Open loop: only the buttons change the offsets.'}${loop.note ? ` · ${loop.note}` : ''}</span>
       <span class="small">Camera: ${Number(loop.arcsec_per_px || 0).toFixed(3)}″/px, x at ${Number(loop.rotation_deg || 0).toFixed(1)}° from +az${loop.flip ? ', mirrored' : ''} (${loop.geometry || 'config'})
         <button class="btn small" disabled=${loop.state === 'calibrating'} onClick=${() => send('target', { calibrate_camera: {} })}
           title="with the target locked: two small az/el moves measure the camera's orientation and scale">${loop.state === 'calibrating' ? 'Calibrating…' : 'Calibrate'}</button>
         ${calibrated && html`<button class="btn small" onClick=${() => send('target', { calibrate_camera: { reset: true } })}
           title="forget the calibration: back to the system file's geometry">Reset</button>`}</span>
     </div>
+  </section>`;
+}
+
+// The camera's centroid relative to the boresight over the last minute, in the mount's axis
+// frame (cross-elevation = az x cos el, and elevation) through the loop's camera geometry, so
+// the chart reads the same open or closed loop. Gaps: the camera was not locked.
+function CentroidPanel({ status, history, now }) {
+  const ref = useRef(null);
+  const loop = status?.loop || {};
+  const cam = loop.camera || 'zwo';
+  const pts = history[`cen:${cam}`] || [];
+  const m = loop.m_arcsec_per_px?.length === 4 ? loop.m_arcsec_per_px.map(Number) : null;
+  const toSky = (dx, dy) => (m ? [m[0] * dx + m[1] * dy, m[2] * dx + m[3] * dy] : [NaN, NaN]);
+  const sky = pts.map(([t, dx, dy]) => [t, ...toSky(dx, dy)]);
+  useEffect(() => {
+    if (ref.current) drawStrip(ref.current, {
+      now_s: now / 1000, unit: '″', minTop: 2, aspect: 0.2, signed: true,
+      series: [{ points: sky.map(([t, x]) => [t, x]), color: cssVar('--accent') },
+        { points: sky.map(([t, , y]) => [t, y]), color: cssVar('--accent2') }],
+    });
+  });
+  const last = sky.length ? sky[sky.length - 1] : null;
+  const fresh = last && now / 1000 - last[0] < 2 && Number.isFinite(last[1]);
+  const snr = pts.length ? pts[pts.length - 1][3] : null;
+  const f = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}″`;
+  return html`<section class="panel" aria-label="Centroid">
+    <div class="head"><h2>${cam} centroid − boresight · 60 s</h2>
+      <span class="small mono" aria-label="Centroid now">${!m ? 'no camera geometry from mount-svc'
+        : fresh ? `x-el ${f(last[1])} · el ${f(last[2])} · r ${Math.hypot(last[1], last[2]).toFixed(1)}″${snr ? ` · SNR ${Math.round(snr)}` : ''}`
+        : 'no locked centroid (Track ROI)'}</span></div>
+    <canvas ref=${ref} role="img" aria-label=${`${cam} centroid offset from the boresight over the last minute, cross-elevation and elevation, arcseconds`}></canvas>
+    <div class="legend"><span><i style="background:var(--accent)"></i>cross-el (az·cos el)</span><span><i style="background:var(--accent2)"></i>el</span>
+      <span class="small">boresight: sensor centre · ${loop.geometry || 'config'} geometry</span></div>
   </section>`;
 }
 
@@ -1102,7 +1137,12 @@ function App() {
       onMessage: (m) => {
         if (m.type === 'hello') { setHello(m); setImaging(m.imaging || null); } else if (m.type === 'imaging') setImaging(m);
         else if (m.type === 'camera') setCameras((c) => ({ ...c, [m.camera_id]: m }));
-        else if (m.type === 'camframe') setCamFrames((c) => ({ ...c, [m.camera_id]: { ...c[m.camera_id], [m.kind === 'capture' ? 'capture' : 'live']: m } }));
+        else if (m.type === 'centroid') {
+          const h = history.current, k = `cen:${m.camera_id}`, t = Number(m.t_ns) / 1e9;
+          const ok = m.state === 'locked' && m.dx != null && m.dy != null;
+          (h[k] ||= []).push([t, ok ? m.dx : NaN, ok ? m.dy : NaN, m.snr]);
+          while (h[k][0][0] < t - 65) h[k].shift();
+        } else if (m.type === 'camframe') setCamFrames((c) => ({ ...c, [m.camera_id]: { ...c[m.camera_id], [m.kind === 'capture' ? 'capture' : 'live']: m } }));
         else if (m.type === 'telemetry') {
           setTel(m);
           const t = Number(m.t_ns) / 1e9;
@@ -1197,6 +1237,7 @@ function App() {
           <${C8Panel} profile=${activeProfile(imaging)} cameras=${cameras} camFrames=${camFrames} send=${send} now=${now} />
         </div>
         <${Corrections} status=${status} send=${send} />
+        <${CentroidPanel} status=${status} history=${history.current} now=${now} />
       </main>
       <aside class="col-right">
         <${SkyPanel} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} />

@@ -204,3 +204,6 @@ label.imaging select { max-width: 330px; }
 .toolbar.track .sensormap { width: 52px; height: 39px; flex: none; }
 .toolbar.track .ok { color: var(--ok); }
 .toolbar.track .warn { color: var(--warn); }
+.loopctl { display: flex; gap: 6px; align-items: center; }
+.loopctl .btn { min-height: 36px; }
+.loopctl .chip { margin-left: 4px; }

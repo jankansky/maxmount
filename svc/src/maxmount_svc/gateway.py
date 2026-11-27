@@ -61,6 +61,7 @@ TLE_MAX_AGE_S = 6 * 3600
 ALL_MAX = 400          # largest group searched with "all objects"
 PASS_ROWS_MAX = 300    # passes returned to the GUI
 LIVEVIEW_MAX_FPS = 8   # live view frames forwarded to browsers
+CENTROID_MAX_HZ = 10   # ROI-tracking centroids forwarded to browsers (the stripchart)
 COORBIT_KM_S = 0.1     # conjunctions slower than this are formation flyers or co-located
 
 
@@ -216,6 +217,7 @@ class Gateway:
         self._cameras: dict[str, dict] = {}       # latest {"type": "camera", ...} per camera id
         self._last_capture: dict[str, dict] = {}  # latest capture frame per camera id
         self._lv_sent: dict[str, float] = {}      # live view frames are sent at most LIVEVIEW_MAX_FPS
+        self._cen_sent: dict[str, float] = {}     # centroids: at most CENTROID_MAX_HZ per camera
 
     # -- Zenoh side ----------------------------------------------------------------------------
     def _on_zenoh(self, kind: str, payload: bytes) -> None:
@@ -233,6 +235,9 @@ class Gateway:
         if kind == "camframe":
             self._camera_frame(payload)
             return
+        if kind == "centroid":
+            self._centroid(payload)
+            return
         if kind == "telemetry":
             m = mpb.MountTelemetry()
             m.ParseFromString(payload)
@@ -243,6 +248,23 @@ class Gateway:
             self._latest_status = m
             self._broadcast({"type": "status", **_msg_to_dict(m)})
             self._maybe_groundtrack(m)
+
+    def _centroid(self, payload: bytes) -> None:
+        """An ROI-tracking centroid to the browsers, thinned to CENTROID_MAX_HZ per camera:
+        {"type": "centroid", camera_id, t_ns, state, dx, dy (unbinned px from the sensor centre), snr}."""
+        c = mpb.CameraCentroid()
+        try:
+            c.ParseFromString(payload)
+        except Exception:  # noqa: BLE001
+            return
+        now = time.monotonic()
+        if now - self._cen_sent.get(c.camera_id, 0) < 1 / CENTROID_MAX_HZ:
+            return
+        self._cen_sent[c.camera_id] = now
+        b = max(int(c.bin), 1)
+        fin = lambda v: v * b if math.isfinite(v) else None  # noqa: E731 - JSON has no NaN
+        self._broadcast({"type": "centroid", "camera_id": c.camera_id, "t_ns": str(c.t_ns), "state": c.state,
+                         "dx": fin(c.dx), "dy": fin(c.dy), "snr": c.snr if math.isfinite(c.snr) else None})
 
     def _camera_frame(self, payload: bytes) -> None:
         """A camera frame to the browsers as {"type": "camframe", ..., "jpeg": base64}; live view
@@ -957,6 +979,7 @@ class Gateway:
             s.declare_subscriber(self.client.key("svc/status"), lambda smp: self._on_zenoh("status", smp.payload.to_bytes())),
             s.declare_subscriber(self.client.key("camera/*/status"), lambda smp: self._on_zenoh("camstatus", smp.payload.to_bytes())),
             s.declare_subscriber(self.client.key("camera/*/frame"), lambda smp: self._on_zenoh("camframe", smp.payload.to_bytes())),
+            s.declare_subscriber(self.client.key("camera/*/centroid"), lambda smp: self._on_zenoh("centroid", smp.payload.to_bytes())),
         ]
         self._pump = asyncio.ensure_future(self._telemetry_pump())
         self._runner = web.AppRunner(self.make_app())

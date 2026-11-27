@@ -18,7 +18,7 @@ are planned.
 | `camera/<id>/status` | pub (1 Hz and on change) | `CameraStatus` (camera.proto) | camera service (`mount-svc dslr`: id `dslr`; `mount-svc zwo`: id `zwo`) → GUI |
 | `camera/<id>/frame` | pub | `CameraFrame`: live view JPEG, and each capture's preview with histogram | camera service → GUI |
 | `camera/<id>/cmd` | queryable | `CameraCommand` → `CameraReply` (settings, capture, bulb, live view, save to, abort, SER recording, ROI tracking) | GUI → camera service |
-| `camera/<id>/centroid` | pub (every frame while ROI tracking) | `CameraCentroid`: the target's sensor position, offset from the sensor centre, velocity, mid-exposure time | camera service (`zwo`) → mount-svc (camera loop, `closed_loop.camera`) |
+| `camera/<id>/centroid` | pub (every frame while ROI tracking) | `CameraCentroid`: the target's sensor position, offset from the sensor centre, velocity, mid-exposure time | camera service (`zwo`) → mount-svc (camera loop, `closed_loop.camera`), GUI gateway (stripchart, ≤ 10 Hz) |
 | `time/status` | pub | clock source, offset, error estimate (TBD) | time monitor → mount-svc, GUI |
 | `safety/status` | pub | safe/unsafe + reasons (TBD) | supervisor → all |
 | `weather/*` | pub | sensor readings (TBD) | weather service → supervisor |

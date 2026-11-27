@@ -68,22 +68,27 @@ def test_main_screen(gui_url):
         page.get_by_role("button", name="Go").click()
         page.wait_for_function("() => document.querySelector('[aria-label=Target] .lcd').textContent.includes('az 15.00')", timeout=15000)
 
-        # Corrections: nudges add to the offsets; Auto turns the camera loop on (it waits for a
-        # camera centroid; none in this test) and Manual off again.
+        # Corrections: nudges add to the offsets; Close loop turns the camera loop on (it waits
+        # for a camera centroid; none in this test) and Open loop off again.
         page.get_by_role("button", name="Elevation up").click()
         page.get_by_role("button", name="Elevation up").click()
         page.wait_for_function("() => document.querySelector('.corr').textContent.includes('el 20″')", timeout=10000)
         page.get_by_role("button", name="Zero nudge").click()
         page.wait_for_function("() => document.querySelector('.corr').textContent.includes('el 0″')", timeout=10000)
-        page.get_by_role("button", name="Auto (camera loop)").click()
+        page.get_by_role("button", name="Close loop").click()
         status = page.get_by_label("Camera loop status")
         page.wait_for_function("() => document.querySelector('[aria-label=\"Camera loop status\"]').textContent.includes('waiting for ')", timeout=10000)
-        assert page.get_by_role("button", name="Auto (camera loop)").get_attribute("aria-pressed") == "true"
+        assert page.get_by_role("button", name="Close loop").get_attribute("aria-pressed") == "true"
+        assert page.get_by_label("Loop state").text_content() == "CLOSING"
+        # The centroid stripchart is there, with the geometry from mount-svc but no centroids.
+        page.wait_for_function("() => document.querySelector('[aria-label=\"Centroid now\"]').textContent.includes('no locked centroid')", timeout=10000)
+        assert page.locator("[aria-label=Centroid] canvas").is_visible()
         assert "0.573″/px" in page.locator(".corr").text_content() and "(config)" in page.locator(".corr").text_content()
         page.get_by_role("button", name="Calibrate").click()
         page.wait_for_function("() => document.querySelector('.statusline').textContent.includes('calibrating needs')", timeout=10000)
-        page.get_by_role("button", name="Manual").click()
-        page.wait_for_function("() => document.querySelector('[aria-label=\"Camera loop status\"]').textContent.includes('Manual')", timeout=10000)
+        page.get_by_role("button", name="Open loop").click()
+        page.wait_for_function("() => document.querySelector('[aria-label=\"Camera loop status\"]').textContent.includes('Open loop')", timeout=10000)
+        assert page.get_by_label("Loop state").text_content() == "OPEN"
         assert status.is_visible()
 
         # The imaging profile picker (sim-altaz: the one default profile) and its pixel scale.
@@ -477,4 +482,78 @@ def test_zwo_panel(gui_url, served, tmp_path, engine):  # noqa: F811
     finally:
         svc.close()
         cam_client.close()
+    assert not errors, errors
+
+
+def test_closed_loop_and_centroid_chart(gui_url, served, tmp_path):  # noqa: F811
+    """With the simulated ZWO (simsky: the target off the boresight by the simulated pointing
+    error): Close loop takes the separation out, and the centroid stripchart plots it."""
+    import math
+
+    from maxmount_svc import zwo
+    from maxmount_svc.camera import CameraService
+    from maxmount_svc.mount import MountClient
+    from maxmount_svc.proto import mpb
+    from maxmount_svc.simsky import SimSky
+
+    from .test_camera import cmd
+    from .test_service_e2e import StatusWatch
+
+    client, settings = served
+    errors = []
+    with MountClient(settings.zenoh) as cam_client, playwright.sync_playwright() as p:
+        backend = zwo.ZwoSimBackend()
+        sky = SimSky(settings, cam_client)
+        backend.sky = sky.offset_px
+        cam = CameraService(cam_client, backend, "zwo", tmp_path, liveview_fps=5)
+        cam.start()
+        try:
+            try:
+                browser = p.chromium.launch()
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"no Chromium for Playwright: {e}")
+            page = browser.new_page(viewport={"width": 1600, "height": 1000})
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(gui_url)
+            page.get_by_role("button", name="Choose target…").click()
+            page.get_by_role("tab", name="Az / El").click()
+            az0 = math.degrees(client.axis("az").cmd_position_rad) % 360
+            page.get_by_label("Azimuth (deg, north = 0, east = 90)").fill(f"{az0 + 3:.2f}")
+            page.get_by_label("Elevation (deg)").fill("45")
+            page.get_by_role("button", name="Go").click()
+            watch = StatusWatch(cam_client)
+            try:
+                watch.wait(lambda s: s.state == mpb.SERVICE_STATE_TRACKING, timeout=60)
+            finally:
+                watch.sub.undeclare()
+            page.wait_for_timeout(2500)  # the axes catch up with the trajectory
+            with MountClient(settings.zenoh) as ctl:
+                assert cmd(ctl, "zwo", set=mpb.SetCameraSetting(name="roi", value="640x480")).ok
+                assert cmd(ctl, "zwo", roi_track=mpb.RoiTrack(on=True)).ok
+            # Open loop: the chart shows the pointing error (about 47" from the boresight).
+            page.wait_for_function("() => document.querySelector('[aria-label=\"Centroid now\"]').textContent.includes('x-el')", timeout=20000)
+            r0 = float(page.get_by_label("Centroid now").text_content().split("r ")[1].split("″")[0])
+            assert r0 > 20
+            page.get_by_role("button", name="Close loop").click()
+            page.wait_for_function("() => document.querySelector('[aria-label=\"Loop state\"]').textContent === 'CLOSED'", timeout=20000)
+            page.wait_for_function("() => { const t = document.querySelector('[aria-label=\"Centroid now\"]').textContent;"
+                                   " return t.includes('r ') && parseFloat(t.split('r ')[1]) < 3; }", timeout=60000)
+            page.wait_for_timeout(3000)
+            # It found the simulated pointing error (not a star): offsets on the sky as simulated.
+            watch = StatusWatch(cam_client)
+            try:
+                z = settings.zwo
+                st = watch.wait(lambda s: abs(s.offsets.el_arcsec - z.sim_el_error_arcsec) < 3, timeout=30)
+                assert st.offsets.az_arcsec * math.cos(math.radians(45)) == pytest.approx(z.sim_az_error_arcsec, abs=3)
+            finally:
+                watch.sub.undeclare()
+            page.locator("[aria-label=Centroid]").screenshot(path=str(tmp_path / "centroid.png"))
+            page.locator("[aria-label=Corrections]").screenshot(path=str(tmp_path / "corrections.png"))
+            page.get_by_role("button", name="Open loop").click()
+            page.wait_for_function("() => document.querySelector('[aria-label=\"Loop state\"]').textContent === 'OPEN'", timeout=10000)
+            browser.close()
+        finally:
+            cam.close()
+            backend.close()
+            sky.close()
     assert not errors, errors

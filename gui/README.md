@@ -127,10 +127,14 @@ it, **Drives** (`#drives`).
     histogram and statistics as for the D500;
   - corrections bar: along-track timing, perpendicular, az/el nudge, all applied live through
     `mount-svc` offsets (the steps add to the current offsets, so they work alongside the
-    camera loop); Auto / Manual switches the camera loop (needs Track ROI in the ZWO panel),
-    with the separation it measures, its state and what it corrects; Calibrate measures the
-    camera's orientation and scale (two small az/el moves while the target is locked), Reset
-    forgets it.
+    camera loop); Open loop / Close loop switches the camera loop (needs Track ROI in the ZWO
+    panel), with an OPEN / CLOSING / CLOSED indicator, the separation it measures, its state
+    and what it corrects; Calibrate measures the camera's orientation and scale (two small
+    az/el moves while the target is locked), Reset forgets it;
+  - centroid stripchart: the camera's ROI-tracking centroid relative to the boresight (the
+    sensor centre) over the last minute, cross-elevation and elevation in arcseconds through
+    the loop's camera geometry, open or closed loop (the gateway forwards
+    `camera/*/centroid` at up to 10 Hz).
 - **Right column:**
   - sky dome (north up, east left; horizon mask, keyhole, planned track, target, mount, Sun)
     and the live target's ground track with visibility circle and night side;

@@ -37,16 +37,20 @@ export function niceTicks(lo, hi, n = 4) {
 }
 
 // series: [{ points: [[t_s, value], ...], color }], x from -span..0 s relative to now_s.
-export function drawStrip(canvas, { series, now_s, span_s = 60, unit = '', minTop = 1, aspect = 0.38 }) {
+// signed: values either side of zero, a symmetric scale and a stronger zero line.
+export function drawStrip(canvas, { series, now_s, span_s = 60, unit = '', minTop = 1, aspect = 0.38, signed = false }) {
   const { ctx, w, h } = setup(canvas, aspect);
   const L = 40, R = 8, T = 8, B = 20;
   const pw = w - L - R, ph = h - T - B;
   let top = minTop;
-  for (const s of series) for (const [t, v] of s.points) if (t >= now_s - span_s && Number.isFinite(v)) top = Math.max(top, v);
-  const { ticks } = niceTicks(0, top * 1.1, 4);
-  const ymax = ticks[ticks.length - 1] || top;
+  for (const s of series) for (const [t, v] of s.points) if (t >= now_s - span_s && Number.isFinite(v)) top = Math.max(top, Math.abs(v));
+  const { ticks: up, step } = niceTicks(0, top * 1.1, signed ? 2 : 4);
+  if (up[up.length - 1] < top) up.push(+(up[up.length - 1] + step).toFixed(10)); // the scale covers the data
+  const ymax = up[up.length - 1] || top;
+  const ymin = signed ? -ymax : 0;
+  const ticks = signed ? [...up.slice(1).reverse().map((v) => -v), ...up] : up;
   const X = (t) => L + pw * (1 - (now_s - t) / span_s);
-  const Y = (v) => T + ph * (1 - v / ymax);
+  const Y = (v) => T + ph * (1 - (v - ymin) / (ymax - ymin));
   const grid = cssVar('--grid'), muted = cssVar('--muted');
   ctx.lineWidth = 1;
   ctx.strokeStyle = grid;
@@ -66,6 +70,10 @@ export function drawStrip(canvas, { series, now_s, span_s = 60, unit = '', minTo
     ctx.beginPath(); ctx.moveTo(x + 0.5, T); ctx.lineTo(x + 0.5, T + ph); ctx.stroke();
     ctx.fillText(k === 6 ? '0 s' : String(Math.round(t - now_s)), x, T + ph + 4);
   }
+  if (signed) {
+    ctx.strokeStyle = muted;
+    ctx.beginPath(); ctx.moveTo(L, Y(0) + 0.5); ctx.lineTo(L + pw, Y(0) + 0.5); ctx.stroke();
+  }
   ctx.lineWidth = 1.6;
   for (const s of series) {
     ctx.strokeStyle = s.color;
@@ -73,7 +81,7 @@ export function drawStrip(canvas, { series, now_s, span_s = 60, unit = '', minTo
     let started = false;
     for (const [t, v] of s.points) {
       if (t < now_s - span_s || !Number.isFinite(v)) { started = false; continue; }
-      const x = X(t), y = Y(Math.min(v, ymax));
+      const x = X(t), y = Y(Math.max(ymin, Math.min(v, ymax)));
       if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
     }
     ctx.stroke();

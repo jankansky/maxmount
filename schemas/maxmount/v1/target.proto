@@ -194,6 +194,9 @@ message LoopStatus {
   bool flip = 13;
   string geometry = 14;         // config | calibrated <UTC time>
   double centroid_age_s = 15;   // < 0: none yet
+  // The geometry as a matrix, row-major [m00, m01, m10, m11], arcsec per unbinned px:
+  // (cross-elevation, elevation) offset of the target from the boresight = M (dx, dy).
+  repeated double m_arcsec_per_px = 16;
 }
 
 message SkyPoint {

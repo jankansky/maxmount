@@ -58,7 +58,7 @@ buffered future points are re-sent. The along-track and cross-track corrections 
 satellite target; the axis offsets apply to any target (hand control, camera loop).
 
 **Camera loop** (`closed_loop` in the system file; TargetCommand `closed_loop`, GUI:
-Corrections, Auto). `mount-svc serve` subscribes to `camera/<closed_loop.camera>/centroid`.
+Corrections, Close loop). `mount-svc serve` subscribes to `camera/<closed_loop.camera>/centroid`.
 While a target is tracked and the camera reports a lock, it averages the centroids for
 `avg_s`, converts the offset from the sensor centre to an angle through the camera geometry,
 and corrects:
