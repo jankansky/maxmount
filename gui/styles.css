@@ -207,3 +207,5 @@ label.imaging select { max-width: 330px; }
 .loopctl { display: flex; gap: 6px; align-items: center; }
 .loopctl .btn { min-height: 36px; }
 .loopctl .chip { margin-left: 4px; }
+.camstack { flex: 1.33 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.camstack > .panel { flex: 0 0 auto; }

@@ -530,7 +530,7 @@ function CentroidPanel({ status, history, now }) {
   const sky = pts.map(([t, dx, dy]) => [t, ...toSky(dx, dy)]);
   useEffect(() => {
     if (ref.current) drawStrip(ref.current, {
-      now_s: now / 1000, unit: '″', minTop: 2, aspect: 0.2, signed: true,
+      now_s: now / 1000, unit: '″', minTop: 2, aspect: 0.5, signed: true,
       series: [{ points: sky.map(([t, x]) => [t, x]), color: cssVar('--accent') },
         { points: sky.map(([t, , y]) => [t, y]), color: cssVar('--accent2') }],
     });
@@ -540,13 +540,14 @@ function CentroidPanel({ status, history, now }) {
   const snr = pts.length ? pts[pts.length - 1][3] : null;
   const f = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}″`;
   return html`<section class="panel" aria-label="Centroid">
-    <div class="head"><h2>${cam} centroid − boresight · 60 s</h2>
-      <span class="small mono" aria-label="Centroid now">${!m ? 'no camera geometry from mount-svc'
+    <h2>${cam} centroid − boresight · 60 s</h2>
+    <span class="small mono" aria-label="Centroid now">${!m ? 'no camera geometry from mount-svc'
         : fresh ? `x-el ${f(last[1])} · el ${f(last[2])} · r ${Math.hypot(last[1], last[2]).toFixed(1)}″${snr ? ` · SNR ${Math.round(snr)}` : ''}`
-        : 'no locked centroid (Track ROI)'}</span></div>
+        : 'no locked centroid (Track ROI)'}</span>
     <canvas ref=${ref} role="img" aria-label=${`${cam} centroid offset from the boresight over the last minute, cross-elevation and elevation, arcseconds`}></canvas>
     <div class="legend"><span><i style="background:var(--accent)"></i>cross-el (az·cos el)</span><span><i style="background:var(--accent2)"></i>el</span>
-      <span class="small">boresight: sensor centre · ${loop.geometry || 'config'} geometry</span></div>
+    </div>
+    <span class="small">boresight: sensor centre · ${loop.geometry || 'config'} geometry</span>
   </section>`;
 }
 
@@ -1231,13 +1232,15 @@ function App() {
       </aside>
       <main class="col-main">
         <div class="row">
-          <${CameraPanel} title="Widefield finder" label="Widefield camera" info="GigE · own lens">
-            No widefield camera yet: a GigE camera with its own lens, like a finder scope, for acquisition and plate solving.
-          <//>
+          <div class="camstack">
+            <${CameraPanel} title="Widefield finder" label="Widefield camera" info="GigE · own lens">
+              No widefield camera yet: a GigE camera with its own lens, like a finder scope, for acquisition and plate solving.
+            <//>
+            <${CentroidPanel} status=${status} history=${history.current} now=${now} />
+          </div>
           <${C8Panel} profile=${activeProfile(imaging)} cameras=${cameras} camFrames=${camFrames} send=${send} now=${now} />
         </div>
         <${Corrections} status=${status} send=${send} />
-        <${CentroidPanel} status=${status} history=${history.current} now=${now} />
       </main>
       <aside class="col-right">
         <${SkyPanel} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} />
