@@ -95,16 +95,18 @@ def _default_sim_model() -> dict:
 @dataclass
 class WidefieldSettings:
     """The widefield (finder) GigE camera, `mount-svc widefield` (system file cameras.widefield).
-    The optics below are PLACEHOLDERS until the camera and lens are chosen: a 1920 x 1200,
-    5.86 um sensor behind a 35 mm lens (about 18 x 11.5 deg, 35"/px)."""
+    Defaults: Allied Vision Prosilica GS1380 (Sony ICX285 CCD, mono, global shutter, 1360 x 1024,
+    6.45 um) behind a 35 mm lens: 14.3 x 10.8 deg, 38"/px."""
     backend: str = "aravis"           # aravis | sim
     camera: str = ""                  # Aravis device id (arv-tool-0.8 lists them), or "" for the first camera found
     data_dir: str = "~/maxmount-data"  # frames go to <data_dir>/widefield/<date>/, solves to .../widefield/solves.jsonl
     liveview_fps: float = 2.0
-    pixel_um: float = 5.86
-    width: int = 1920
-    height: int = 1200
-    focal_mm: float = 35.0
+    pixel_um: float = 6.45
+    width: int = 1360
+    height: int = 1024
+    focal_mm: float = 35.0            # nominal; the solver accepts +-12 %; replace with the solved value
+    distortion_k1: float = 0.0        # the lens' radial distortion at the corners (0.01 = 1 %); solves refit it
+    latency_ms: float = 0.0           # frame arrival after the end of the exposure (readout + transfer); measure
     exposure_ms: float = 500.0
     gain: float = 10.0                # dB
     packet_size: int = 0              # GigE packet size (0: negotiate; 8192+ with jumbo frames)
@@ -116,6 +118,7 @@ class WidefieldSettings:
     sim_flip: bool = False
     sim_model: dict = field(default_factory=_default_sim_model)
     sim_cloudy: bool = False          # no stars (solves fail)
+    sim_distortion_k1: float = 0.0    # the simulated lens' radial distortion (platesolve's convention)
 
     @property
     def arcsec_per_px(self) -> float:

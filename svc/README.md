@@ -128,10 +128,12 @@ camera's Solve command takes the first frame exposed after the request and the e
 at its mid-exposure time (from `mount/telemetry`, kept for five minutes). The hint is where the
 mount believes it points: the encoders through the active model. The built-in solver (numpy)
 detects stars, matches triangles against the catalogue (`skycat`, HYG to mag 8) within
-`search_radius_deg` (default 5°) of the hint, and fits a TAN projection. It works in observed
-az/el, so refraction is in the catalogue positions instead of bending the field. In simulation
-a 1920 × 1200 frame at 35″/px solves in about 0.3 s to under 1″, from 15° elevation up and at
-the pole. With `solver: astap` it runs ASTAP's `astap_cli` instead (installed separately, with
+`search_radius_deg` (default 5°) of the hint, and fits a TAN projection with the lens' radial
+distortion (k1, refitted on every solve with 20+ stars and reported as % at the corners;
+`distortion_k1` is the starting value). It works in observed az/el, so refraction is in the
+catalogue positions instead of bending the field. In simulation a GS1380 frame (1360 × 1024 at
+38″/px, 35 mm lens) solves in well under a second to a few arcseconds, from 15° elevation up and
+at the pole. With `solver: astap` it runs ASTAP's `astap_cli` instead (installed separately, with
 a star database). The result goes into the camera status: RA/Dec, roll, scale, stars matched,
 and the pointing error (solved minus believed, on the sky). Every solve is appended to
 `<data_dir>/widefield/solves.jsonl` as a candidate pointing point.
@@ -159,8 +161,10 @@ by solving a C8 frame too is not built yet.
 
 ## Widefield camera setup (Pi)
 
-The widefield finder is a GigE Vision camera (The Imaging Source) on the Pi's USB-Ethernet
-adapter (`eth1`), read through Aravis:
+The widefield finder is an Allied Vision Prosilica GS1380 (Sony ICX285 CCD, mono, global
+shutter, 1360 × 1024, 6.45 µm) with a 35 mm C-mount lens (14.3° × 10.8°, 38″/px), a GigE Vision
+camera on the Pi's USB-Ethernet adapter (`eth1`), read through Aravis. It sends Mono12 in 16-bit
+words for solving (it has no Mono16) or Mono8:
 
 ```sh
 sudo apt install gir1.2-aravis-0.8 aravis-tools python3-gi   # Aravis 0.8, its GObject bindings
@@ -174,9 +178,11 @@ in `svc/.venv/pyvenv.cfg`. Alternatively, `pip install PyGObject` in the venv af
 
 Give `eth1` a static address on the camera's subnet. Use jumbo frames if the adapter supports
 them (`ip link set eth1 mtu 9000`, then `cameras.widefield.packet_size: 8192`), and raise the
-socket receive buffer (`sysctl -w net.core.rmem_max=33554432`). Set `pixel_um`, `width`,
-`height` and `focal_mm` in `cameras.widefield` to the real camera and lens: the solver needs the
-scale to within about 10 %. The values in the system files are placeholders.
+socket receive buffer (`sysctl -w net.core.rmem_max=33554432`). Full frames are 1360 × 1024 ×
+2 bytes, ~2.8 MB; even 20 fps is ~56 MB/s, within a gigabit link. After the first solves, put
+the solved focal length (from the reported ″/px) into `focal_mm` and the reported distortion
+into `distortion_k1`; `latency_ms` (frame arrival after the end of the exposure) is still to be
+measured. The GS1380 also has a trigger input: the design's preferred way to time exposures.
 
 ASTAP (optional, `solver: astap`): install the `astap_cli` command-line build for aarch64 and a
 star database (D50, or W08 for very wide fields) from the ASTAP site. It is an external program,

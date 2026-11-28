@@ -24,7 +24,7 @@ Custom alt-az mount on an iOptron tri-pier, with elevation travel from −45° t
 | Drives | 2× Technosoft iPOS4808 BX-CAT | CiA 402 over EtherCAT, CSP mode |
 | Computer | Raspberry Pi 4B with PREEMPT_RT kernel | One core isolated for the RT loop |
 | Telescope | Celestron C8, primary mirror to be locked, Starizona SCT Corrector IV (0.63× reducer/coma corrector) | External motorized focuser |
-| Widefield camera | The Imaging Source GigE | Through-axis Ethernet; acquisition and plate solving |
+| Widefield camera | Allied Vision Prosilica GS1380 (ICX285 CCD, mono, global shutter, 1360 × 1024, 6.45 µm) + 35 mm lens: 14.3° × 10.8°, 38″/px | Through-axis Ethernet; acquisition and plate solving |
 | Narrow-field camera | ZWO USB3 behind the C8: ASI224MC now (colour, 3.75 µm, 1304 × 976); a 2.9 µm mono sensor planned | Through-axis USB; fast region-of-interest tracking |
 | Stills camera | Nikon D500 (APS-C, 4.22 µm, 5568 × 3712, not astro-modified) | Deep-sky and satellite stills; gphoto2 control; no ROI streaming |
 | GNSS | u-blox M8 USB receiver (1546:01a8) | Location and backup time; add a PPS-capable module for timing |
@@ -486,7 +486,7 @@ GPL-3.0-or-later, matching SOEM 2.x. Summary, not legal advice:
 - [ ] Check REE2000 max output frequency and drive encoder input bandwidth against worst-case elevation rate.
 - [ ] Measure azimuth cable-wrap travel allowed by the through-axis cables.
 - [ ] Obtain a GNSS module with a PPS pin wired to a Pi GPIO.
-- [ ] Check whether the ZWO and Imaging Source cameras have hardware trigger inputs or PTP.
+- [ ] Check whether the ZWO and GS1380 hardware trigger inputs (or PTP) can time exposures from the PPS-disciplined clock.
 - [ ] Choose a C8 primary lock approach and an external focuser.
 - [ ] Measure payload inertia and axis torque limits to set pass-planner rate limits.
 

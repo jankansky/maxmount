@@ -13,7 +13,7 @@ for the last minutes. The hint for the solver is where the mount believes it poi
 encoders through the active pointing model (pointfit.load_model), as RA/Dec.
 
 Backends:
-  AravisBackend   a GigE Vision camera (The Imaging Source and others) through Aravis 0.8
+  AravisBackend   a GigE Vision camera (Allied Vision GS1380 and others) through Aravis 0.8
                   (PyGObject: gi.repository.Aravis; apt install gir1.2-aravis-0.8 python3-gi).
                   Mono8/Mono16, exposure, gain. Imported only when used.
   WidefieldSimBackend  renders catalogue stars (skycat, mag <= 8) where the camera REALLY
@@ -118,6 +118,12 @@ def render_sky(cfg: WidefieldSettings, site, t_ns: int, a: float, e: float, expo
             ok = ub > math.cos(radius)
             x, y = (u[ok] @ hh) / ub[ok], (u[ok] @ gg) / ub[ok]
             px = np.linalg.solve(geom.m, np.stack([x, y]))  # (2, N) sensor px from the centre
+            k1 = cfg.sim_distortion_k1
+            if k1:  # the lens' radial distortion (platesolve's convention), inverted by iteration
+                r2_of = lambda q: (q ** 2).sum(axis=0) / (0.5 * math.hypot(w, h)) ** 2  # noqa: E731
+                pu, px = px, px.copy()
+                for _ in range(6):
+                    px = pu / (1 + k1 * r2_of(px))
             cx, cy = px[0] + (w - 1) / 2, px[1] + (h - 1) / 2
             flux = 10 ** (-0.4 * (cat.mag[idx][ok] - 17.0)) * exposure_s  # e-: mag 8 ~ 4000 e-/s
             sigma, r = 1.3, 6
@@ -382,6 +388,10 @@ class AravisBackend(_WidefieldBase):
         self.cam = None
         self.stream = None
         self._payload = 0
+        self._bits = 16
+
+    def full_scale(self) -> float:
+        return float((1 << self._bits) - 1)
 
     def open(self) -> str:
         A = self.Aravis
@@ -427,8 +437,21 @@ class AravisBackend(_WidefieldBase):
         elif name == "gain" and self.cam.is_gain_available():
             self.cam.set_gain(self.v["gain"])
         elif name == "format":
-            fmt = A.PIXEL_FORMAT_MONO_16 if self.v["format"] == "MONO16" else A.PIXEL_FORMAT_MONO_8
-            self.cam.set_pixel_format(fmt)
+            # Deep frames: Mono16 if the camera has it, else Mono12 in 16-bit words (the
+            # Allied Vision GS1380 offers Mono8 / Mono12 / Mono12Packed, not Mono16).
+            self._bits = 8
+            if self.v["format"] == "MONO16":
+                try:
+                    offered = set(self.cam.dup_available_pixel_formats_as_strings() or [])
+                except Exception:  # noqa: BLE001 - GLib.Error: try Mono16 anyway
+                    offered = {"Mono16"}
+                for fmt, name_, bits in ((A.PIXEL_FORMAT_MONO_16, "Mono16", 16), (A.PIXEL_FORMAT_MONO_12, "Mono12", 12)):
+                    if name_ in offered:
+                        self.cam.set_pixel_format(fmt)
+                        self._bits = bits
+                        return
+                log.warning("widefield: neither Mono16 nor Mono12 offered (%s); using Mono8", sorted(offered))
+            self.cam.set_pixel_format(A.PIXEL_FORMAT_MONO_8)
 
     def _begin_video(self) -> None:
         A = self.Aravis
@@ -457,14 +480,14 @@ class AravisBackend(_WidefieldBase):
                 self._dropped += 1
                 raise CameraError(f"frame lost ({buf.get_status().value_nick})")
             w, h = buf.get_image_width(), buf.get_image_height()
-            dtype = np.uint16 if self.v["format"] == "MONO16" else np.uint8
+            dtype = np.uint16 if self._bits > 8 else np.uint8
             a = np.frombuffer(buf.get_data(), dtype=dtype)[: w * h].reshape(h, w).copy()
             # Host time when the frame arrived (ns since the epoch), minus half the exposure and
-            # the transfer (not known: about frame size / link speed; small at 1 Gb/s).
+            # the camera's readout + transfer (cameras.widefield.latency_ms, to be measured).
             t_arrive = int(buf.get_system_timestamp()) or time.time_ns()
         finally:
             self.stream.push_buffer(buf)
-        return a, t_arrive - int(self.exposure_s() * NS / 2)
+        return a, t_arrive - int(self.exposure_s() * NS / 2) - int(self.cfg.latency_ms * 1e6)
 
     def _grab(self):
         return self._pop(self.exposure_s() + 3.0)
@@ -610,7 +633,7 @@ class WidefieldService(CameraService):
                                        math.degrees(radius), cfg.astap_path)
         else:
             r = platesolve.solve(adu, bra, bdec, cfg.arcsec_per_px * ARCSEC, search_radius=radius,
-                                 frame=ObservedFrame(site, t_mid))
+                                 frame=ObservedFrame(site, t_mid), k1=cfg.distortion_k1)
         sol.ok, sol.message, sol.solve_s = r.ok, r.message, r.solve_s
         sol.stars, sol.matched = r.stars, r.matched
         if not r.ok:

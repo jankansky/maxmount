@@ -52,6 +52,7 @@ class Solution:
     rms_arcsec: float = math.nan
     solve_s: float = 0.0
     solver: str = "builtin"
+    k1: float = 0.0                 # radial distortion: undistorted = measured * (1 + k1 (r / half-diagonal)^2)
 
     @property
     def arcsec_per_px(self) -> float:
@@ -73,7 +74,7 @@ class Solution:
         return {"ok": self.ok, "message": self.message, "ra_deg": math.degrees(self.ra), "dec_deg": math.degrees(self.dec),
                 "roll_deg": self.roll_deg, "arcsec_per_px": self.arcsec_per_px, "mirrored": self.mirrored,
                 "stars": self.stars, "matched": self.matched, "rms_arcsec": self.rms_arcsec, "solve_s": self.solve_s,
-                "solver": self.solver}
+                "solver": self.solver, "k1": self.k1}
 
 
 # -- projection -------------------------------------------------------------------------------
@@ -223,13 +224,19 @@ class IcrsFrame:
 
 def solve(img: np.ndarray, hint_ra: float, hint_dec: float, scale_rad_px: float, search_radius: float = 5 * DEG,
           scale_tol: float = 0.12, year: float | None = None, stars: skycat.Stars | None = None,
-          detections: tuple[np.ndarray, float] | None = None, frame=None) -> Solution:
+          detections: tuple[np.ndarray, float] | None = None, frame=None, fit_distortion: bool = True,
+          k1: float = 0.0) -> Solution:
     """Solve a mono frame. hint_*: rad (ICRS); search_radius: how far off the hint may be.
 
     frame: the coordinates the image is a gnomonic projection of (default ICRS). The widefield
     camera passes observed az/el (widefield.ObservedFrame): refraction then is in the catalogue
     positions, not a distortion of the field, so the centre stays accurate near the horizon.
-    The result is always ICRS."""
+    The result is always ICRS.
+
+    Lens distortion: radial, undistorted = measured * (1 + k1 (r / R)^2) about the image centre,
+    R the half-diagonal (k1 = 0.01: 1 % at the corners). k1 is the starting value; with
+    fit_distortion it is fitted once 20+ stars match (a machine-vision lens' 0.5-1 % is several
+    arcminutes at the edge of a wide field, which a plain TAN fit would leave as residuals)."""
     t0 = time.monotonic()
     cat = stars or skycat.stars()
     year = year if year is not None else 2000.0 + (time.time() - 946728000) / (365.25 * 86400)
@@ -304,9 +311,11 @@ def solve(img: np.ndarray, hint_ra: float, hint_dec: float, scale_rad_px: float,
     # the tangent plane turn as its centre moves, a lot near the pole).
     a, c_lon, c_lat = best[1], h_lon, h_lat
     all_pix = det[:, :2] - (cx, cy)
+    r2 = (all_pix ** 2).sum(axis=1, keepdims=True) / (0.5 * diag_px) ** 2
+    undist = lambda k: all_pix * (1 + k * r2)  # noqa: E731
     matched, rms_px = 0, math.inf
     for tol_px in (max(8.0, 0.006 * diag_px), 4.0, 2.5, 2.0, 2.0):
-        s_lon, s_lat = tan_deproject(c_lon, c_lat, *(_apply(a, all_pix) * scale_rad_px).T)
+        s_lon, s_lat = tan_deproject(c_lon, c_lat, *(_apply(a, undist(k1)) * scale_rad_px).T)
         n_lon, n_lat = (float(v) for v in tan_deproject(c_lon, c_lat, *(a[:, 2] * scale_rad_px)))
         c_lon, c_lat = n_lon, n_lat
         pxi, peta, _ = tan_project(c_lon, c_lat, s_lon, s_lat)
@@ -322,8 +331,22 @@ def solve(img: np.ndarray, hint_ra: float, hint_dec: float, scale_rad_px: float,
         gi = np.flatnonzero(good)[first]
         if len(gi) < 6:
             return fail(f"no solution: only {len(gi)} stars matched after refinement")
-        a = _affine(all_pix[gi], pcat[j[gi]])
-        res = _apply(a, all_pix[gi]) - pcat[j[gi]]
+        a = _affine(undist(k1)[gi], pcat[j[gi]])
+        if fit_distortion and len(gi) >= 20:
+            # Affine part and k1 together (k1 alone would be half absorbed by the scale):
+            # pcat = L p + t + k1 L (p r^2), linear with L held in the k1 column; iterate.
+            p, q, pr = all_pix[gi], pcat[j[gi]], all_pix[gi] * r2[gi]
+            for _ in range(3):
+                g = pr @ a[:, :2].T
+                n = len(p)
+                m = np.zeros((2 * n, 7))
+                m[0::2, 0:2], m[0::2, 2] = p, 1.0
+                m[1::2, 3:5], m[1::2, 5] = p, 1.0
+                m[0::2, 6], m[1::2, 6] = g[:, 0], g[:, 1]
+                x = np.linalg.lstsq(m, q.ravel(), rcond=None)[0]
+                k1 = float(np.clip(x[6], -0.2, 0.2))
+                a = _affine(undist(k1)[gi], q)
+        res = _apply(a, undist(k1)[gi]) - pcat[j[gi]]
         matched, rms_px = len(gi), float(np.sqrt((res ** 2).sum(axis=1).mean()))
         n_cat_field = len(pcat)
     # The image centre, and the CD matrix about it.
@@ -340,9 +363,10 @@ def solve(img: np.ndarray, hint_ra: float, hint_dec: float, scale_rad_px: float,
     q_xi, q_eta, _ = tan_project(ra0, dec0, np.asarray(p_ra, float), np.asarray(p_dec, float))
     cd_icrs = np.array([[q_xi[1] - q_xi[0], q_xi[2] - q_xi[0]], [q_eta[1] - q_eta[0], q_eta[2] - q_eta[0]]]) / 100.0
     scale = math.sqrt(abs(np.linalg.det(cd)))
-    return Solution(True, f"solved: {matched} of {n_det} stars, rms {rms_px * scale / ARCSEC:.1f}\"",
+    dist = f", distortion {100 * k1:+.2f} % at the corners" if fit_distortion and abs(k1) >= 5e-4 else ""
+    return Solution(True, f"solved: {matched} of {n_det} stars, rms {rms_px * scale / ARCSEC:.1f}\"{dist}",
                     ra=ra0, dec=dec0, cd=cd_icrs, stars=n_det, matched=matched, rms_arcsec=rms_px * scale / ARCSEC,
-                    solve_s=time.monotonic() - t0)
+                    solve_s=time.monotonic() - t0, k1=k1)
 
 
 # -- ASTAP ------------------------------------------------------------------------------------

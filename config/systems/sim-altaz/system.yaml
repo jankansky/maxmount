@@ -43,17 +43,18 @@ imaging:
       color: true
       focal_mm: 1350
 
-# Widefield finder (`mount-svc widefield --sim`): placeholder optics (see the reference system).
+# Widefield finder (`mount-svc widefield --sim`): Allied Vision GS1380 + 35 mm lens, as the reference system.
 # The simulator draws catalogue stars where the mount REALLY points: the encoder angles through
 # sim_model, the "true" pointing errors that a pointing run (GUI: Pointing model) should find.
 cameras:
   widefield:
     backend: sim
-    pixel_um: 5.86
-    width: 1920
-    height: 1200
+    pixel_um: 6.45
+    width: 1360
+    height: 1024
     focal_mm: 35
     exposure_ms: 500
+    sim_distortion_k1: 0.008  # a typical machine-vision lens: 0.8 % at the corners; solves fit it
     sim_rotation_deg: 12
     sim_model: {IA: 420, IE: -300, CA: 150, NPAE: 40, AN: 90, AW: -60, TF: 30}
 

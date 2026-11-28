@@ -96,7 +96,7 @@ docker run --rm -v "$PWD":/src:ro maxmount-linux-build bash -c \
 
 Custom alt-az mount: Aerotech ADRT-150 direct-drive azimuth, Teknic Hudson motor with
 Bell-Everman ServoBelt elevation stage and Renishaw tape encoder, two Technosoft
-iPOS4808 BX-CAT drives, Raspberry Pi 4, Celestron C8, ZWO and The Imaging Source cameras.
+iPOS4808 BX-CAT drives, Raspberry Pi 4, Celestron C8, ZWO and Allied Vision GS1380 cameras.
 See [`config/systems/maxmount-reference`](config/systems/maxmount-reference).
 
 ## License

@@ -128,16 +128,21 @@ cameras:
                               # (to be measured on the real camera)
   # widefield: the GigE finder camera with its own lens (`mount-svc widefield`), through Aravis
   # (apt install gir1.2-aravis-0.8 python3-gi; arv-tool-0.8 lists cameras). It plate-solves
-  # for the pointing model. The optics are PLACEHOLDERS until the camera and lens are chosen.
+  # for the pointing model. Allied Vision Prosilica GS1380: Sony ICX285 CCD, mono, global shutter
+  # (one exposure time for the whole frame), 1360 x 1024, 6.45 um; Mono8 / Mono12 over GigE Vision.
+  # With a 35 mm C-mount lens: 14.3 x 10.8 deg, 38"/px, ~150 catalogue stars (mag <= 8) in the
+  # field (~50 near the galactic poles).
   widefield:
     backend: aravis           # or sim: catalogue stars where the mount really points
-    camera: ""                # Aravis device id, e.g. "The Imaging Source Europe GmbH-12345678"; "" = first found
+    camera: ""                # Aravis device id from arv-tool-0.8, e.g. "Allied Vision Technologies-<serial>"; "" = first found
     data_dir: ~/maxmount-data # frames go to <data_dir>/widefield/<date>/, solves to <data_dir>/widefield/solves.jsonl
     liveview_fps: 2
-    pixel_um: 5.86            # PLACEHOLDER: e.g. a 1920 x 1200 Sony IMX174 ...
-    width: 1920
-    height: 1200
-    focal_mm: 35              # PLACEHOLDER: ... behind a 35 mm lens: 18 x 11.5 deg, 35"/px
+    pixel_um: 6.45
+    width: 1360
+    height: 1024
+    focal_mm: 35              # nominal; the solver allows +-12 %: put the solved value here (arcsec/px = 206.265 * pixel_um / focal_mm)
+    distortion_k1: 0          # radial distortion at the corners (0.01 = 1 %): every solve fits it and reports it; put the typical value here
+    latency_ms: 0             # frame arrival after the exposure ends (readout + transfer, ~tens of ms): to measure
     exposure_ms: 500
     gain: 10                  # dB
     packet_size: 0            # GigE packet size; 0 = negotiate (8192+ with jumbo frames on eth1)

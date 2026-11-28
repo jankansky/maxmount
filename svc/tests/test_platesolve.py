@@ -91,3 +91,25 @@ def test_astap_ini_parsing():
     assert sol.ok and math.degrees(sol.ra) == pytest.approx(83.8) and math.degrees(sol.dec) == pytest.approx(-5.4)
     assert sol.arcsec_per_px == pytest.approx(34.56)
     assert not platesolve.parse_astap_ini("PLTSOLVD=F\nWARNING=no stars", 10, 10).ok
+
+
+@pytest.mark.parametrize("k1", [0.012, -0.008])
+def test_fits_lens_distortion(k1):
+    """A lens with ~1 % radial distortion at the corners: fitted, and the centre and scale stay right."""
+    from dataclasses import replace
+
+    cfg = replace(WidefieldSettings(), sim_distortion_k1=k1)
+    a, e = 150 * DEG, 55 * DEG
+    img = render_sky(cfg, SITE, T_NS, a, e, 1.0, 10, np.random.default_rng(9), rotation_deg=20).astype(np.float32)
+    az, el = (float(v) for v in kinematics.from_mech(a, e))
+    ra, dec = icrs_of(SITE, T_NS, az, el)
+    scale = cfg.arcsec_per_px * ARCSEC
+    sol = platesolve.solve(img, ra + 1 * DEG, dec, scale, search_radius=4 * DEG, year=2026.04, frame=ObservedFrame(SITE, T_NS))
+    assert sol.ok, sol.message
+    assert sol.k1 == pytest.approx(k1, abs=0.0015)
+    assert "distortion" in sol.message
+    assert _sep(sol.ra, sol.dec, ra, dec) / ARCSEC < 5
+    assert sol.rms_arcsec < 18  # ~0.4 px: the simulated centroid noise, as with no distortion (13.8")
+    off = platesolve.solve(img, ra + 1 * DEG, dec, scale, search_radius=4 * DEG, year=2026.04,
+                           frame=ObservedFrame(SITE, T_NS), fit_distortion=False)
+    assert not off.ok or off.rms_arcsec > 1.5 * sol.rms_arcsec  # without the term the fit is clearly worse
