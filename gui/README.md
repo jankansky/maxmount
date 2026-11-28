@@ -159,9 +159,10 @@ A planetarium view for choosing astrophotography targets (`skychart.js`).
 
 - **Chart:** stereographic projection; drag to pan, wheel or pinch to zoom (0.5°–200° field,
   about the pointer), double-click to zoom in, arrow keys and +/− when the chart has focus,
-  Escape clears the selection. **Horizon** (zenith up, the default) or **Equatorial** (north
-  up, east left). Toggles: constellations, deep sky, labels, ground (below the horizon, with
-  the horizon-mask band and its dashed line), alt-az grid, RA/Dec grid, star colours (B−V).
+  Escape clears the selection. **Horizon** (zenith up, the default; grid of altitude and
+  azimuth) or **Equatorial** (north up, east left; grid of RA and Dec). Toggles:
+  constellations, deep sky, labels, ground (below the horizon, with the horizon-mask band and
+  its dashed line), the grid, star colours (B−V).
   Stars are shown to mag 5 at the widest field and to mag 8 zoomed in; deep-sky objects use
   type symbols (galaxies as ellipses at their size and position angle, open clusters dashed,
   globulars crossed, nebulae as squares, planetary nebulae ringed). The Sun, the Moon (with

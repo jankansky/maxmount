@@ -203,32 +203,52 @@ function drawChart(canvas, st) {
   const visible = (p) => dot(p, V.c) > V.cosR;
   const fov = view.fov;
 
-  // Grids.
+  // Grid of the view's own coordinates: altitude/azimuth in Horizon mode, RA/Dec in Equatorial.
   ctx.lineWidth = 1;
-  if (show.altaz) {
-    ctx.strokeStyle = cssVar('--grid'); ctx.setLineDash([]);
+  ctx.strokeStyle = cssVar('--grid'); ctx.setLineDash([]);
+  // Labels: parallels (alt, Dec) along the meridian through the centre, meridians (az, RA)
+  // along a parallel below the centre (the horizon in a wide Horizon view).
+  const gridLabels = [];
+  const gridLabel = (v, text) => {
+    const q = V.proj(v);
+    if (q && dot(v, V.c) > V.cosR && q[0] > 16 && q[0] < w - 16 && q[1] > 22 && q[1] < h - 8) gridLabels.push([q, text]);
+  };
+  const lowerPar = (c) => Math.max(c - 0.8 * (fov / 2) * (h / w), -80); // 80% of the way to the bottom edge
+  if (show.grid && horizonMode) {
     const stepAlt = fov > 90 ? 15 : fov > 30 ? 10 : fov > 10 ? 5 : 1, stepAz = fov > 90 ? 30 : fov > 30 ? 15 : fov > 10 ? 5 : 1;
-    for (let a = stepAlt; a < 90; a += stepAlt) path(ctx, V, smallCircle(zen, a * DEG, 180), true);
+    for (let a = stepAlt; a < 90; a += stepAlt) {
+      path(ctx, V, smallCircle(zen, a * DEG, 180), true);
+      gridLabel(azelVec(view.az * DEG, a * DEG), `${a}°`);
+    }
+    const labelAlt = Math.max(lowerPar(view.alt), 1);
     for (let az = 0; az < 360; az += stepAz) {
       const pts = [];
       for (let e = 0; e <= 90; e += 2) pts.push(enuToWorld(azelVec(az * DEG, e * DEG)));
       path(ctx, V, pts);
+      gridLabel(azelVec(az * DEG, labelAlt * DEG), `az ${az}°`);
     }
   }
-  if (show.radec) {
-    ctx.strokeStyle = red ? cssVar('--grid') : 'rgba(79,168,216,0.22)'; ctx.setLineDash([2, 3]);
+  if (show.grid && !horizonMode) {
     const stepDec = fov > 90 ? 15 : fov > 30 ? 10 : fov > 10 ? 5 : 1, stepRa = fov > 90 ? 2 : fov > 30 ? 1 : fov > 10 ? 1 / 3 : 1 / 12;
     for (let d = -90 + stepDec; d < 90; d += stepDec) {
       const pts = [];
       for (let a = 0; a <= 360; a += 2) pts.push(toWorld(unit(a, d)));
       path(ctx, V, pts);
+      gridLabel(unit(view.ra, d), `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}°`);
     }
-    for (let hr = 0; hr < 24 - 1e-9; hr += stepRa) {
-      const pts = [];
+    const labelDec = lowerPar(view.dec);
+    for (let i = 0; i * stepRa < 24 - 1e-9; i++) {
+      const hr = i * stepRa, pts = [];
       for (let d = -88; d <= 88; d += 2) pts.push(toWorld(unit(hr * 15, d)));
       path(ctx, V, pts);
+      const hh = Math.floor(hr + 1e-9), mm = Math.round((hr - hh) * 60);
+      gridLabel(unit(hr * 15, labelDec), mm ? `${hh}h${String(mm).padStart(2, '0')}m` : `${hh}h`);
     }
-    ctx.setLineDash([]);
+  }
+  if (gridLabels.length) {
+    ctx.fillStyle = cssVar('--muted'); ctx.font = '10px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    for (const [q, t] of gridLabels) ctx.fillText(t, q[0] + 3, q[1] - 2);
   }
   // Constellations.
   if (show.const) {
@@ -463,7 +483,12 @@ export function SkyChartScreen({ active, hello, tel, status, profile, send, ask 
   const [cat, setCat] = useState(null);
   const [frame, setFrame] = useState(null);
   const [view, setViewState] = useState(() => clampView({ mode: 'horizon', az: 180, alt: 45, ra: 0, dec: 0, fov: 120, ...loadPref('skychart_view', {}) }));
-  const [show, setShowState] = useState(() => ({ const: true, labels: true, dso: true, ground: true, altaz: true, radec: false, color: true, ...loadPref('skychart_show', {}) }));
+  const [show, setShowState] = useState(() => {
+    const v = { const: true, labels: true, dso: true, ground: true, color: true, ...loadPref('skychart_show', {}) };
+    // Saved before the grid followed the mode: separate alt-az and RA/Dec toggles.
+    if (v.grid === undefined) v.grid = v.altaz !== false || !!v.radec;
+    return v;
+  });
   const [sel, setSel] = useState(null);
   const [info, setInfo] = useState(null);
   const [reply, setReply] = useState(null);
@@ -643,7 +668,7 @@ export function SkyChartScreen({ active, hello, tel, status, profile, send, ask 
           <button class=${view.mode === 'horizon' ? 'on' : ''} aria-pressed=${view.mode === 'horizon'} onClick=${() => setMode('horizon')}>Horizon</button>
           <button class=${view.mode === 'equatorial' ? 'on' : ''} aria-pressed=${view.mode === 'equatorial'} onClick=${() => setMode('equatorial')}>Equatorial</button>
         </div>
-        ${[['const', 'Constellations'], ['dso', 'Deep sky'], ['labels', 'Labels'], ['ground', 'Ground'], ['altaz', 'Alt-az grid'], ['radec', 'RA/Dec grid'], ['color', 'Star colours']].map(([k, t]) => html`
+        ${[['const', 'Constellations'], ['dso', 'Deep sky'], ['labels', 'Labels'], ['ground', 'Ground'], ['grid', view.mode === 'horizon' ? 'Alt-az grid' : 'RA/Dec grid'], ['color', 'Star colours']].map(([k, t]) => html`
           <label class="check"><input type="checkbox" checked=${show[k]} onChange=${(e) => setShow(k, e.target.checked)} />${t}</label>`)}
         <button class="btn small" onClick=${() => tel?.sky && setView(view.mode === 'horizon' ? clampView({ ...view, az: tel.sky.az_deg, alt: tel.sky.el_deg }) : clampView({ ...view, ra: tel.sky.ra_h * 15, dec: tel.sky.dec_deg }))}>Centre on mount</button>
         <span class="small">drag: pan · wheel/pinch: zoom · click: select · double-click: zoom in</span>
