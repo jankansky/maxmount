@@ -112,7 +112,7 @@ Setting up at a new site takes about 5 minutes: home the axes, plate-solve 6–1
 only the site terms.
 
 1. **Plan points:** spread over the sky within the horizon mask, on both sides of zenith, away from the Moon, ordered to minimize slews and cable wrap. Presets: site refit (6–12 points) and full model (30–60 points).
-2. **Measure:** slew, settle, expose the widefield camera, plate-solve with ASTAP. Optionally solve the C8/ZWO frame too, which measures the boresight offset between cameras.
+2. **Measure:** slew, settle, expose the widefield camera, and plate-solve it. The built-in hinted solver works in observed az/el against the bundled catalogue; ASTAP is optional. Optionally solve the C8/ZWO frame too, which measures the boresight offset between cameras.
 3. **Record:** commanded and encoder axis angles, mid-exposure UTC, solved RA/Dec, side of zenith, temperature, pressure and focuser position.
 4. **Reduce:** ERFA converts each solved position to apparent topocentric az/el, including refraction.
 5. **Fit:** weighted least squares over a term library, with robust outlier rejection and significance tests to drop unsupported terms.

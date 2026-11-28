@@ -625,3 +625,74 @@ def test_track_screen_sky_and_ground(adsb_file, gui_url, tmp_path):
         page.screenshot(path=os.environ.get("MAXMOUNT_SHOT", str(tmp_path / "track-aircraft.png")))
         browser.close()
     assert not errors, errors
+
+
+SHOTS = os.environ.get("MAXMOUNT_SHOTS")  # a directory for screenshots to look at (default: the test's tmp dir)
+
+
+def test_widefield_solve_and_pointing_run(gui_url, served, tmp_path):  # noqa: F811
+    """The simulated widefield camera: Solve on the Track screen shows the pointing error; a
+    site-refit pointing run from the Pointing model screen fits, shows the errors before and
+    after, and Apply makes it the active model (with history)."""
+    from pathlib import Path
+
+    from maxmount_svc.mount import MountClient
+    from maxmount_svc.widefield import WidefieldService, WidefieldSimBackend
+
+    _client, settings = served
+    settings.pointing_run.settle_s = 0.3
+    settings.widefield.exposure_ms = 200
+    settings.widefield.data_dir = str(tmp_path / "data")
+    shots = Path(SHOTS) if SHOTS else tmp_path
+    errors = []
+    with MountClient(settings.zenoh) as cam_client, playwright.sync_playwright() as p:
+        backend = WidefieldSimBackend(settings.widefield, settings.site)
+        wf = WidefieldService(cam_client, backend, settings)
+        backend.pointing = wf.pointing
+        wf.start()
+        try:
+            try:
+                browser = p.chromium.launch()
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"no Chromium for Playwright: {e}")
+            page = browser.new_page(viewport={"width": 1600, "height": 1000})
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+            page.goto(gui_url)
+            panel = page.locator("[aria-label='Widefield camera']")
+            panel.get_by_text("simulated").wait_for(timeout=20000)
+            panel.get_by_role("button", name="Solve").click()
+            sol = panel.locator("[aria-label='Plate solution']")
+            sol.get_by_text("pointing error").wait_for(timeout=20000)
+            assert "of 80 stars" in sol.text_content()
+            panel.get_by_role("button", name="Live view").click()
+            panel.locator("img").wait_for(timeout=15000)
+            page.wait_for_timeout(1500)
+            page.screenshot(path=str(shots / "widefield-track-dark.png"))
+
+            page.get_by_role("button", name="Pointing model").click()
+            screen = page.locator(".pointing")
+            screen.get_by_label("Number of points").fill("6")
+            screen.get_by_role("button", name="Start run").click()
+            page.wait_for_timeout(8000)
+            page.screenshot(path=str(shots / "pointing-running-dark.png"))
+            screen.get_by_role("button", name="Apply").wait_for(timeout=300000)
+            assert "rms" in screen.locator("[aria-label='Pointing fit'] .head").text_content()
+            page.wait_for_timeout(1200)
+            page.screenshot(path=str(shots / "pointing-done-dark.png"), full_page=True)
+            screen.get_by_role("button", name="After fit").click()
+            page.wait_for_timeout(500)
+            page.get_by_role("button", name="Red").click()
+            page.wait_for_timeout(800)
+            page.screenshot(path=str(shots / "pointing-after-red.png"), full_page=True)
+            page.get_by_role("button", name="Dark").click()
+            screen.get_by_role("button", name="Apply").click()
+            screen.get_by_text("applied model").first.wait_for(timeout=10000)
+            screen.locator("[aria-label='Model history'] tr.current").wait_for(timeout=5000)
+            page.wait_for_timeout(1200)
+            page.screenshot(path=str(shots / "pointing-applied-dark.png"), full_page=True)
+            browser.close()
+        finally:
+            wf.close()
+            backend.close()
+    assert not errors, errors

@@ -126,6 +126,34 @@ cameras:
     record_min_free_mb: 2048  # recording stops when the disk has less free space than this
     roi_latency_frames: 2     # ROI tracking: frames still read at the old ROI position after a move
                               # (to be measured on the real camera)
+  # widefield: the GigE finder camera with its own lens (`mount-svc widefield`), through Aravis
+  # (apt install gir1.2-aravis-0.8 python3-gi; arv-tool-0.8 lists cameras). It plate-solves
+  # for the pointing model. The optics are PLACEHOLDERS until the camera and lens are chosen.
+  widefield:
+    backend: aravis           # or sim: catalogue stars where the mount really points
+    camera: ""                # Aravis device id, e.g. "The Imaging Source Europe GmbH-12345678"; "" = first found
+    data_dir: ~/maxmount-data # frames go to <data_dir>/widefield/<date>/, solves to <data_dir>/widefield/solves.jsonl
+    liveview_fps: 2
+    pixel_um: 5.86            # PLACEHOLDER: e.g. a 1920 x 1200 Sony IMX174 ...
+    width: 1920
+    height: 1200
+    focal_mm: 35              # PLACEHOLDER: ... behind a 35 mm lens: 18 x 11.5 deg, 35"/px
+    exposure_ms: 500
+    gain: 10                  # dB
+    packet_size: 0            # GigE packet size; 0 = negotiate (8192+ with jumbo frames on eth1)
+    solver: builtin           # builtin (numpy, catalogue to mag 8) | astap (astap_cli + a star database)
+    astap_path: astap_cli
+    search_radius_deg: 5      # how far from the mount's position a solve looks
+
+# Pointing model runs (mount-svc serve; the GUI's Pointing model screen): slew to points over
+# the sky, plate-solve the widefield camera at each, fit pointing.py's terms.
+pointing_run:
+  camera: widefield
+  settle_s: 2
+  min_el_deg: 0               # 0 = horizon mask + 5 deg
+  max_el_deg: 80              # keep out of the zenith keyhole
+  solve_timeout_s: 60
+  moon_min_sep_deg: 15
 
 # Camera loop (mount-svc serve): the narrow-field camera's ROI-tracking centroids
 # (camera/<camera>/centroid) become tracking corrections: time and cross-track offsets for
@@ -190,6 +218,5 @@ axes:
       max_acc_deg_s2: 10
       max_following_error_deg: 1.0
 
-cameras:
-  widefield: {type: gige, interface: usb-ethernet}
-  narrow: {type: zwo, interface: usb3, telescope: Celestron C8}
+# Camera hardware (settings are under `cameras:` above): widefield GigE finder on the
+# USB-Ethernet adapter; narrow field ZWO on USB 3 at the C8.

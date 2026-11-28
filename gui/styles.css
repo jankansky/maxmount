@@ -213,3 +213,20 @@ label.imaging select { max-width: 330px; }
 .camstack > .panel.centroid { flex: 1 1 auto; }
 .fillchart { position: relative; flex: 1 1 0; min-height: 140px; }
 .fillchart canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Widefield finder (Track screen) */
+.camview.wf { aspect-ratio: 16 / 10; }
+.widefield .solution { display: flex; flex-direction: column; gap: 2px; min-height: 3.6em; overflow-wrap: anywhere; }
+.widefield .solution .warn, .pointing .warn { color: var(--warn); }
+
+/* Pointing model screen */
+.pointing { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.pt-row { display: grid; grid-template-columns: minmax(280px, 460px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.pt-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (max-width: 900px) { .pt-row { grid-template-columns: 1fr; } }
+.pointing .seg button { min-height: 28px; }
+.pointing th.num, .pointing td.num { text-align: right; }
+.pointing th.nocase { text-transform: none; }
+.pointing [aria-label='Pointing points'] .tablewrap { max-height: 50vh; overflow-y: auto; }
+.pointing [aria-label='Pointing points'] thead th { position: sticky; top: 0; background: var(--panel); }
+.pointing .tablewrap tbody tr { cursor: default; }

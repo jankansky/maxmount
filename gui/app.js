@@ -6,6 +6,7 @@ import { connect } from './lib/ws.js';
 import { drawStrip, drawSky, drawMap, drawHist, cssVar } from './lib/charts.js';
 import { pad, dms, hms, utc, dur, loadPref, savePref } from './lib/util.js';
 import { DrivesScreen } from './drives.js';
+import { PointingScreen } from './pointing.js';
 
 
 const STATE = {
@@ -49,9 +50,9 @@ const fmtMag = (p) => (p.peak_mag == null ? null : `${p.mag_estimated ? '≈' : 
 const fmtAng = (a) => (a >= 60 ? `${(a / 60).toFixed(1)}′` : `${a < 10 ? Number(a).toFixed(1) : Math.round(a)}″`);
 const fmtSize = (p) => (p.ang_size_arcsec == null ? null : `${p.size_estimated ? '≈' : ''}${fmtAng(p.ang_size_arcsec)}`);
 const LIGHT_OPTS = [['any', 'any'], ['sunlit', 'sunlit'], ['dark_sky', 'sunlit, dark sky']];
-const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives']];
+const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives'], ['pointing', 'Pointing model']];
 const screenFromHash = () => { const h = location.hash.slice(1); return SCREENS.some(([id]) => id === h) ? h : 'track'; };
-const LATER = ['Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
+const LATER = ['Objects', 'Sequences', 'Recordings', 'Calibration', 'Setup'];
 
 // The active narrow-field imaging profile (system file `imaging:`), from hello / 'imaging' messages.
 const activeProfile = (im) => im?.profiles?.find((p) => p.key === im.active) || null;
@@ -432,6 +433,65 @@ function CameraPanel({ title, info, square, label, children }) {
         <line x1="40" y1="50" x2="60" y2="50" stroke="var(--accent)" stroke-width="0.4"></line>
         <circle cx="50" cy="50" r="5" fill="none" stroke="var(--accent)" stroke-width="0.4"></circle></svg>`}
       <span>${children}</span>
+    </div>
+  </section>`;
+}
+
+// Widefield finder (`mount-svc widefield`): live view, exposure, gain, format, FITS frames;
+// Solve plate-solves the next frame: where it points, and the mount's pointing error there.
+function WidefieldPanel({ cam, frames, send, hello }) {
+  const [zoom, setZoom] = useState(false);
+  const wf = hello?.widefield;
+  const fov = cam?.fov_w_deg ? [cam.fov_w_deg, cam.fov_h_deg] : wf?.fov_deg;
+  const scale = Number(cam?.arcsec_per_px || wf?.arcsec_per_px);
+  const info = fov ? `${Number(fov[0]).toFixed(1)}° × ${Number(fov[1]).toFixed(1)}° · ${scale.toFixed(1)}″/px` : 'GigE · own lens';
+  if (!cam) {
+    return html`<${CameraPanel} title="Widefield finder" label="Widefield camera" info=${info}>
+      Widefield camera service not running. Start it on the Pi with <code>mount-svc --system $SYS widefield</code>
+      (add <code>--sim</code> to try it without the camera).<//>`;
+  }
+  const cmd = (args) => send('camera', { camera_id: 'widefield', ...args });
+  const live = cam.liveview && frames?.live;
+  const shown = live ? frames.live : frames?.capture;
+  const busy = cam.state === 'exposing' || cam.state === 'downloading';
+  const off = !cam.connected || busy;
+  const field = (n) => {
+    const st = (cam.settings || []).find((x) => x.name === n);
+    if (!st) return null;
+    if (st.numeric) return html`<${NumSetting} st=${st} cmd=${cmd} disabled=${off} />`;
+    return html`<label>${st.label} <${Select} aria-label=${st.label} value=${st.value} disabled=${off || st.read_only}
+      options=${st.choices.map((c) => [c, c])} onChange=${(v) => cmd({ set: { name: n, value: v } })} /></label>`;
+  };
+  const sol = cam.solution;
+  const has = sol && sol.t_ns && sol.t_ns !== '0';
+  const err = has && sol.ok ? Math.hypot(sol.err_xel_arcsec, sol.err_el_arcsec) : 0;
+  const ang = (a) => (Math.abs(a) >= 60 ? `${(a / 60).toFixed(1)}′` : `${a.toFixed(0)}″`);
+  return html`<section class="panel camera wide widefield" aria-label="Widefield camera">
+    <div class="head"><h2>Widefield finder</h2>
+      <span class="small mono">${cam.connected ? `${cam.state}${cam.liveview ? ` · ${Number(cam.fps).toFixed(1)} fps` : ''}` : 'not connected'}${cam.simulated ? ' · simulated' : ''} · ${info}</span></div>
+    <div class=${'camview img wf' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre" onClick=${() => setZoom(!zoom)}>
+      ${shown ? html`<img alt=${live ? 'widefield live view' : 'widefield frame'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
+        : html`<span>${cam.connected ? 'Start live view, or Solve to take and solve one frame.' : cam.message}</span>`}
+      ${shown && html`<svg viewBox="0 0 100 62.5" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <g stroke="var(--accent)" stroke-width="0.25" opacity="0.8"><line x1="46" y1="31.25" x2="54" y2="31.25"></line><line x1="50" y1="27.25" x2="50" y2="35.25"></line></g></svg>`}
+      ${shown && html`<span class="tag">${live ? 'LIVE' : 'last frame'}</span>`}
+    </div>
+    <div class="toolbar">
+      <button class=${'btn' + (cam.liveview ? ' on' : '')} aria-pressed=${!!cam.liveview} disabled=${off}
+        onClick=${() => cmd({ liveview: !cam.liveview })}>${cam.liveview ? 'Live view on' : 'Live view'}</button>
+      ${field('exposure_ms')}${field('gain')}${field('format')}
+      <label class="check"><input type="checkbox" checked=${!!cam.stretch} onChange=${(e) => cmd({ stretch: e.target.checked })} /> Stretch</label>
+      <button class="btn" disabled=${off} onClick=${() => cmd({ capture: { bulb_s: 0 } })}>Capture frame</button>
+      <button class="btn primary" disabled=${!cam.connected || cam.solving} onClick=${() => cmd({ solve: {} })}
+        title="Plate-solve the next frame: where the camera points, and the mount's pointing error">${cam.solving ? 'Solving…' : 'Solve'}</button>
+    </div>
+    <div class="solution small mono" aria-label="Plate solution">
+      ${cam.solving ? 'solving the next frame…'
+        : !has ? html`<span class="muted">No solve yet.</span>`
+        : sol.ok ? html`<span>RA ${hms(Number(sol.ra_deg) / 15, 1)} Dec ${dms(Number(sol.dec_deg))} · az ${Number(sol.az_deg).toFixed(2)}° el ${Number(sol.el_deg).toFixed(2)}°</span>
+            <span>pointing error <b class=${err > 600 ? 'warn' : ''}>${ang(sol.err_xel_arcsec)} x-el, ${ang(sol.err_el_arcsec)} el</b> (${ang(err)}) · roll ${Number(sol.roll_deg).toFixed(1)}° · ${Number(sol.arcsec_per_px).toFixed(2)}″/px</span>
+            <span class="muted">${sol.matched} of ${sol.stars} stars · rms ${Number(sol.rms_arcsec).toFixed(1)}″ · ${Number(sol.solve_s).toFixed(1)} s · ${sol.solver} · ${utc(sol.t_ns)} UTC</span>`
+        : html`<span class="warn">${sol.message}</span>`}
     </div>
   </section>`;
 }
@@ -1249,6 +1309,9 @@ function App() {
       <${DrivesScreen} tel=${tel} hello=${hello} status=${status} send=${send}
         history=${history.current} now=${now} events=${events.current} faults=${faults.current} />
     </div>
+    <div class="layout" hidden=${screen !== 'pointing'}>
+      <${PointingScreen} send=${send} hello=${hello} connected=${connected} active=${screen === 'pointing'} cam=${cameras.widefield} />
+    </div>
     <div class="passes-screen" hidden=${screen !== 'passes'}>
       <${PassViews} status=${status} tel=${tel} hello=${hello} track=${track} land=${land} preview=${preview}
         air=${listTab === 'air' ? airView : null} />
@@ -1274,9 +1337,7 @@ function App() {
       <main class="col-main">
         <div class="row">
           <div class="camstack">
-            <${CameraPanel} title="Widefield finder" label="Widefield camera" info="GigE · own lens">
-              No widefield camera yet: a GigE camera with its own lens, like a finder scope, for acquisition and plate solving.
-            <//>
+            <${WidefieldPanel} cam=${cameras.widefield} frames=${camFrames.widefield} send=${send} hello=${hello} />
             <${CentroidPanel} status=${status} history=${history.current} now=${now} />
           </div>
           <${C8Panel} profile=${activeProfile(imaging)} cameras=${cameras} camFrames=${camFrames} send=${send} now=${now} />

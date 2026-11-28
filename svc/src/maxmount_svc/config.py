@@ -7,7 +7,7 @@ time. mount-rt ignores site and tracking.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field
 from pathlib import Path
 
 import yaml
@@ -84,6 +84,60 @@ class ZwoSettings:
     sim_rotation_deg: float = 20.0        # sensor +x from +azimuth (see closedloop.CameraGeometry)
     sim_flip: float = 0.0                 # 1 = mirrored
     sim_arcsec_per_px: float = 0.38       # ASI224MC (3.75 um) at 2032 mm
+
+
+def _default_sim_model() -> dict:
+    # The simulated mount's "true" pointing errors as the widefield sees them (arcsec, terms as
+    # in pointing.py): a pointing run should find these.
+    return {"IA": 420.0, "IE": -300.0, "CA": 150.0, "NPAE": 40.0, "AN": 90.0, "AW": -60.0, "TF": 30.0}
+
+
+@dataclass
+class WidefieldSettings:
+    """The widefield (finder) GigE camera, `mount-svc widefield` (system file cameras.widefield).
+    The optics below are PLACEHOLDERS until the camera and lens are chosen: a 1920 x 1200,
+    5.86 um sensor behind a 35 mm lens (about 18 x 11.5 deg, 35"/px)."""
+    backend: str = "aravis"           # aravis | sim
+    camera: str = ""                  # Aravis device id (arv-tool-0.8 lists them), or "" for the first camera found
+    data_dir: str = "~/maxmount-data"  # frames go to <data_dir>/widefield/<date>/, solves to .../widefield/solves.jsonl
+    liveview_fps: float = 2.0
+    pixel_um: float = 5.86
+    width: int = 1920
+    height: int = 1200
+    focal_mm: float = 35.0
+    exposure_ms: float = 500.0
+    gain: float = 10.0                # dB
+    packet_size: int = 0              # GigE packet size (0: negotiate; 8192+ with jumbo frames)
+    solver: str = "builtin"           # builtin | astap
+    astap_path: str = "astap_cli"
+    search_radius_deg: float = 5.0    # how far from the mount's position a solve looks
+    # Simulator only: how the camera really sits and the mount's true pointing errors.
+    sim_rotation_deg: float = 12.0    # sensor +x from +azimuth towards +elevation
+    sim_flip: bool = False
+    sim_model: dict = field(default_factory=_default_sim_model)
+    sim_cloudy: bool = False          # no stars (solves fail)
+
+    @property
+    def arcsec_per_px(self) -> float:
+        return RAD_AS * self.pixel_um / (self.focal_mm * 1000)
+
+    @property
+    def fov_deg(self) -> tuple[float, float]:
+        f = self.focal_mm * 1000
+        return (2 * math.degrees(math.atan(self.width * self.pixel_um / 2 / f)),
+                2 * math.degrees(math.atan(self.height * self.pixel_um / 2 / f)))
+
+
+@dataclass
+class PointingRunSettings:
+    """Pointing model runs in mount-svc (system file `pointing_run:`)."""
+    camera: str = "widefield"
+    settle_s: float = 2.0             # after the mount reaches a point, before the exposure
+    min_el_deg: float = 0.0           # 0: the horizon mask + 5 deg
+    max_el_deg: float = 80.0          # the zenith keyhole stays out
+    solve_timeout_s: float = 60.0
+    sun_min_sep_deg: float = 0.0      # 0: tracking.sun_min_sep_deg
+    moon_min_sep_deg: float = 15.0
 
 
 @dataclass
@@ -214,6 +268,8 @@ class SystemSettings:
     dslr: DslrSettings = field(default_factory=DslrSettings)
     zwo: ZwoSettings = field(default_factory=ZwoSettings)
     closed_loop: ClosedLoopSettings = field(default_factory=ClosedLoopSettings)
+    widefield: WidefieldSettings = field(default_factory=WidefieldSettings)
+    pointing_run: PointingRunSettings = field(default_factory=PointingRunSettings)
 
     def loop_arcsec_per_px(self) -> float:
         """The camera loop's starting pixel scale: configured, or the imaging profile of the
@@ -280,6 +336,32 @@ def _closed_loop(d: dict) -> ClosedLoopSettings:
                                      for k, v in d.items() if k in ClosedLoopSettings.__dataclass_fields__})
     except (TypeError, ValueError) as e:
         raise ConfigError(f"closed_loop: {e}") from None
+
+
+def _typed(cls, d: dict, section: str):
+    """A settings dataclass from a mapping: known keys only, each converted to its default's type."""
+    out = {}
+    for k, v in (d or {}).items():
+        f = cls.__dataclass_fields__.get(k)
+        if f is None:
+            continue
+        default = None if f.default is MISSING else f.default
+        try:
+            if isinstance(default, bool):
+                out[k] = bool(v)
+            elif isinstance(default, int):
+                out[k] = int(v)
+            elif isinstance(default, float):
+                out[k] = float(v)
+            elif isinstance(default, str):
+                out[k] = str(v)
+            elif k == "sim_model":
+                out[k] = {str(t): float(c) for t, c in (v or {}).items()}
+            else:
+                out[k] = v
+        except (TypeError, ValueError, AttributeError) as e:
+            raise ConfigError(f"{section}.{k}: {e}") from None
+    return cls(**out)
 
 
 def load_system(path: str | Path) -> SystemSettings:
@@ -356,6 +438,8 @@ def load_system(path: str | Path) -> SystemSettings:
         zwo=ZwoSettings(**{k: (str(v) if k in ("backend", "sdk_lib", "data_dir") else float(v))
                            for k, v in ((doc.get("cameras") or {}).get("zwo") or {}).items() if k in ZwoSettings.__dataclass_fields__}),
         closed_loop=_closed_loop(doc.get("closed_loop") or {}),
+        widefield=_typed(WidefieldSettings, (doc.get("cameras") or {}).get("widefield") or {}, "cameras.widefield"),
+        pointing_run=_typed(PointingRunSettings, doc.get("pointing_run") or {}, "pointing_run"),
         adsb=AdsbSettings(**{k: (str(v) if k == "source" else float(v))
                              for k, v in (doc.get("adsb") or {}).items() if k in AdsbSettings.__dataclass_fields__}),
     )

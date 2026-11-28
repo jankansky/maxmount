@@ -351,6 +351,36 @@ def cmd_zwo(args, sys_: SystemSettings) -> int:
     return _serve_camera(sys_, backend, "zwo", cfg.data_dir, cfg.liveview_fps, "pi", setup)
 
 
+def cmd_widefield(args, sys_: SystemSettings) -> int:
+    from .camera import CameraError
+    from .mount import MountClient
+    from .widefield import AravisBackend, WidefieldService, WidefieldSimBackend
+
+    cfg = sys_.widefield
+    sim = args.sim or cfg.backend == "sim"
+    try:
+        backend = WidefieldSimBackend(cfg, sys_.site) if sim else AravisBackend(cfg)
+    except CameraError as e:
+        print(f"mount-svc: {e}", file=sys.stderr)
+        return 1
+    stop = []
+    signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    with MountClient(sys_.zenoh) as client:
+        svc = WidefieldService(client, backend, sys_)
+        if sim:
+            backend.pointing = svc.pointing  # the simulated sky follows the mount's encoders
+        svc.start()
+        w, h = cfg.fov_deg
+        print(f"widefield camera service on {svc.key('*')} ({'simulated' if sim else 'Aravis'}; "
+              f"{w:.1f} x {h:.1f} deg, {cfg.arcsec_per_px:.1f}\"/px, solver {cfg.solver}); Ctrl-C to stop")
+        while not stop:
+            time.sleep(0.2)
+        svc.close()
+        backend.close()
+    return 0
+
+
 def _serve_camera(sys_: SystemSettings, backend, camera_id: str, data_dir: str, fps: float, save_to: str,
                   setup=None) -> int:
     from .camera import CameraService
@@ -434,6 +464,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("zwo", help="serve the ZWO camera (ASI SDK) for the GUI: video, ROI, FITS frames, SER recording")
     p.add_argument("--sim", action="store_true", help="a simulated ASI224MC (star field and a moving target)")
     p.set_defaults(func=cmd_zwo)
+
+    p = sub.add_parser("widefield", help="serve the widefield GigE camera (Aravis) for the GUI: live view, FITS frames, plate solving")
+    p.add_argument("--sim", action="store_true", help="a simulated camera: catalogue stars where the simulated mount really points")
+    p.set_defaults(func=cmd_widefield)
 
     p = sub.add_parser("request", help="send a request to a running 'mount-svc serve'")
     rs = p.add_subparsers(dest="what", required=True)

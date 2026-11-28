@@ -32,6 +32,7 @@ svc/.venv/bin/mount-svc --system $SYS track-tle --tle iss.tle   # wait for the n
 svc/.venv/bin/mount-svc --system $SYS adsb-sim                   # simulated ADS-B traffic at adsb.source (no receiver)
 svc/.venv/bin/mount-svc --system $SYS dslr                       # stills camera over USB (Nikon D500); --sim without one
 svc/.venv/bin/mount-svc --system $SYS zwo                        # ZWO camera (ASI SDK); --sim: a simulated ASI224MC
+svc/.venv/bin/mount-svc --system $SYS widefield                  # widefield GigE finder (Aravis), plate solving; --sim without one
 svc/.venv/bin/mount-svc --system $SYS track-radec --ra 06:45:08.9 --dec -16:42:58 --minutes 10
 svc/.venv/bin/mount-svc --system $SYS goto --az 180 --el 45
 ```
@@ -117,9 +118,69 @@ over-the-top when its error is within `tracking.over_the_top_tolerance_deg`.
 
 ### Pointing model
 
-TPOINT-style terms (IA, IE, CA, NPAE, AN, AW, TF, BE) are applied to the mechanical angles. The
-`pointing:` entry in the system file names a YAML file with `terms: {IA: 12.3, ...}` in
-arcseconds. Fitting comes with the camera service.
+TPOINT-style terms (IA, IE, CA, NPAE, AN, AW, TF, BE; `pointing.py`) are applied to the
+mechanical angles: commanded = ideal + corrections. The active model is the file the system
+file's `pointing:` entry names, or `~/.local/state/maxmount/<system>-pointing.yaml` if it names
+none (`terms: {IA: 12.3, ...}` in arcseconds).
+
+**Plate solving** (`mount-svc widefield`, `widefield.py`, `platesolve.py`). The widefield
+camera's Solve command takes the first frame exposed after the request and the encoder angles
+at its mid-exposure time (from `mount/telemetry`, kept for five minutes). The hint is where the
+mount believes it points: the encoders through the active model. The built-in solver (numpy)
+detects stars, matches triangles against the catalogue (`skycat`, HYG to mag 8) within
+`search_radius_deg` (default 5°) of the hint, and fits a TAN projection. It works in observed
+az/el, so refraction is in the catalogue positions instead of bending the field. In simulation
+a 1920 × 1200 frame at 35″/px solves in about 0.3 s to under 1″, from 15° elevation up and at
+the pole. With `solver: astap` it runs ASTAP's `astap_cli` instead (installed separately, with
+a star database). The result goes into the camera status: RA/Dec, roll, scale, stars matched,
+and the pointing error (solved minus believed, on the sky). Every solve is appended to
+`<data_dir>/widefield/solves.jsonl` as a candidate pointing point.
+
+**Pointing runs** (`pointrun.py`, `pointfit.py`; queryable `svc/pointing`, `pointing.proto`;
+GUI: Pointing model). A run plans points evenly over the sky between the horizon mask + 5° and
+80°, away from the Sun and the Moon. Every fourth point is taken past the zenith in full mode,
+so BE can be fitted. Points are ordered by slew time. At each point the mount goes to it,
+waits `pointing_run.settle_s`, and asks the widefield service to solve. ERFA reduces each solve
+to ideal mechanical angles on the encoders' side. Then a least-squares fit runs, with on-sky
+weighting, iterative 3σ outlier rejection, and dropping of terms below 2σ (IA and IE always
+stay). Site mode fits IA, IE, AN and AW and keeps the other terms. Apply writes the model, keeps
+every version in `~/.local/state/maxmount/<system>-pointing-history/`, and mount-svc uses it
+from the next target. The run zeroes the az/el offsets and opens the camera loop first.
+Afterwards the mount holds the last point for five minutes, then disables the drives.
+
+In simulation (`widefield --sim`) the stars are drawn where the mount really points: the
+encoders through the inverse of `cameras.widefield.sim_model`. A 12-point full run recovers
+that model to a few arcseconds, and after Apply a solve shows under 10″ of error
+(`tests/test_pointing_run.py`).
+
+The fitted model describes the widefield camera's boresight. The C8's boresight differs by a
+fixed offset (mostly IA, IE and CA). The camera loop takes that out while tracking; measuring it
+by solving a C8 frame too is not built yet.
+
+## Widefield camera setup (Pi)
+
+The widefield finder is a GigE Vision camera (The Imaging Source) on the Pi's USB-Ethernet
+adapter (`eth1`), read through Aravis:
+
+```sh
+sudo apt install gir1.2-aravis-0.8 aravis-tools python3-gi   # Aravis 0.8, its GObject bindings
+arv-tool-0.8                                                  # lists cameras: use the id as cameras.widefield.camera
+```
+
+PyGObject comes from Debian, so the venv must see system packages. Recreate it with
+`python3 -m venv --system-site-packages svc/.venv`, or set `include-system-site-packages = true`
+in `svc/.venv/pyvenv.cfg`. Alternatively, `pip install PyGObject` in the venv after
+`sudo apt install libgirepository-2.0-dev libcairo2-dev`.
+
+Give `eth1` a static address on the camera's subnet. Use jumbo frames if the adapter supports
+them (`ip link set eth1 mtu 9000`, then `cameras.widefield.packet_size: 8192`), and raise the
+socket receive buffer (`sysctl -w net.core.rmem_max=33554432`). Set `pixel_um`, `width`,
+`height` and `focal_mm` in `cameras.widefield` to the real camera and lens: the solver needs the
+scale to within about 10 %. The values in the system files are placeholders.
+
+ASTAP (optional, `solver: astap`): install the `astap_cli` command-line build for aarch64 and a
+star database (D50, or W08 for very wide fields) from the ASTAP site. It is an external program,
+not linked.
 
 ## ZWO camera setup (Pi)
 
