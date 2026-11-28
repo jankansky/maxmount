@@ -169,3 +169,25 @@ def test_mount_svc_tracks_a_body(service):  # noqa: F811
     rep = query(gui, "svc/target", mpb.TargetCommand(track_body=mpb.SolarSystemBody(body="pluto")), mpb.TargetReply)
     assert not rep.accepted and "unknown body" in rep.message
     assert query(gui, "svc/target", mpb.TargetCommand(stop=mpb.Stop()), mpb.TargetReply).accepted
+
+
+@pytest.mark.parametrize("which", ["moon", "saturn", "star"])
+def test_sampled_target_matches_exact(site, which):
+    """Planning interpolates fixed-sky targets from 60 s samples: it must agree with the exact
+    ERFA path to far below an arcsecond above 5 deg (below ~3 deg the refraction formula's
+    zenith-distance clamp puts a kink in the path; the horizon mask is well above that), and
+    fall back to the exact path outside its span."""
+    from maxmount_svc.targets import Sampled, SiderealTarget
+    exact = (SiderealTarget(site, math.radians(279.23), math.radians(38.78), name="Vega") if which == "star"
+             else skyframe.BodyTarget(site, which))
+    t0 = time.time_ns()
+    s = Sampled(exact, t0, t0 + 12 * 3600 * 10**9)
+    t = t0 + np.arange(0, 12 * 3600, 7.3).astype(np.int64) * 10**9
+    a1, e1 = exact.observed(t)
+    a2, e2 = s.observed(t)
+    sep = astro.separation(a1, e1, a2, e2)
+    up = e1 > math.radians(5)
+    assert np.degrees(sep[up].max()) * 3600 < 0.01
+    assert s.name == exact.name
+    out = t0 + 13 * 3600 * 10**9
+    assert s.observed(np.int64(out)) == pytest.approx(exact.observed(np.int64(out)))

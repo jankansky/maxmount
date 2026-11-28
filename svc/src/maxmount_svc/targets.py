@@ -152,3 +152,48 @@ def _cross_track(u, u_later, offset):
     norm = np.linalg.norm(left, axis=-1, keepdims=True)
     left = np.where(norm > 0, left / np.where(norm > 0, norm, 1.0), 0.0)
     return u * math.cos(offset) + left * math.sin(offset)
+
+
+class Sampled:
+    """A slowly moving target (star, planet, Moon) sampled exactly every step_s over
+    [t0, t1] and interpolated in between: a cubic (4-point Lagrange) through the observed
+    east/north/up unit vectors, renormalised. Planning evaluates a fixed-sky target once a
+    second for hours, and ERFA's full ICRS -> observed transform per sample takes ~0.7 ms on
+    a Pi 4 (30 s for a 4 h Saturn track, past the request timeout). The sky turns 0.25 deg in
+    60 s, so the interpolation error is ~1e-10 rad; refraction near the horizon is just as
+    smooth on that scale. Times outside the grid go to the wrapped target."""
+
+    def __init__(self, target, t0_ns: int, t1_ns: int, step_s: float = 60.0):
+        self.target, self.name = target, target.name
+        self._step = int(step_s * 1_000_000_000)
+        self._t0 = int(t0_ns) - self._step
+        n = int((int(t1_ns) - self._t0) // self._step) + 3  # one sample of margin each side
+        t = self._t0 + self._step * np.arange(n, dtype=np.int64)
+        self._t1 = int(t[-1])
+        self._v = astro.azel_to_enu(*target.observed(t))
+
+    def __getattr__(self, name):
+        return getattr(self.target, name)
+
+    def observed(self, t_ns):
+        scalar = np.ndim(t_ns) == 0
+        t = np.atleast_1d(np.asarray(t_ns, dtype=np.int64))
+        inside = (t >= self._t0 + self._step) & (t <= self._t1 - self._step)
+        if not inside.all():
+            if not inside.any():
+                return self.target.observed(t_ns)
+            az, el = self.target.observed(t)
+            az_i, el_i = self._interp(t[inside])
+            az[inside], el[inside] = az_i, el_i
+        else:
+            az, el = self._interp(t)
+        return (float(az[0]), float(el[0])) if scalar else (az, el)
+
+    def _interp(self, t):
+        x = (t - self._t0) / self._step                    # grid index, float
+        i = np.clip(np.floor(x).astype(np.int64), 1, len(self._v) - 3)
+        u = (x - i)[:, None]                               # in [0, 1): between samples i and i+1
+        w = (-u * (u - 1) * (u - 2) / 6, (u + 1) * (u - 1) * (u - 2) / 2,
+             -(u + 1) * u * (u - 2) / 2, (u + 1) * u * (u - 1) / 6)
+        v = w[0] * self._v[i - 1] + w[1] * self._v[i] + w[2] * self._v[i + 1] + w[3] * self._v[i + 2]
+        return astro.enu_to_azel(v / np.linalg.norm(v, axis=-1, keepdims=True))

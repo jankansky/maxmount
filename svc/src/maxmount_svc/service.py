@@ -31,7 +31,7 @@ from .mount import MountClient, MountError
 from .planner import NS, Plan
 from .pointing import PointingModel
 from .proto import mpb
-from .targets import FixedTarget, SatelliteTarget, SgpError, SiderealTarget
+from .targets import FixedTarget, Sampled, SatelliteTarget, SgpError, SiderealTarget
 
 log = logging.getLogger(__name__)
 DEG = math.pi / 180
@@ -266,6 +266,7 @@ class MountService:
         if duration_s > 0:
             end = min(end, t0 + int(duration_s * NS))
         end = min(end, t0 + 8 * 3600 * NS)
+        target = Sampled(target, t0 - 60 * NS, end + 60 * NS)  # exact ERFA every 60 s, cubic between
         best, plans = self._make_plan(target, t0, end, ("normal", "flipped"), step_s=1.0)
         if best is None:
             raise Rejected(_rejection(plans))
