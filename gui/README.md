@@ -25,7 +25,8 @@ The header is shared by every screen:
 - **Dark / Red** theme switch, remembered by the browser.
 
 Screens: **Passes** (`#passes`) to choose a satellite pass, **Track** (the default) to follow
-it, **Sky chart** (`#sky`) to choose stars, deep-sky objects and planets, **Drives** (`#drives`).
+it, **Sky chart** (`#sky`) to choose stars, deep-sky objects and planets, **Drives** (`#drives`),
+**Pointing model** (`#pointing`).
 
 ## The Passes screen (`#passes`)
 
@@ -108,7 +109,11 @@ it, **Sky chart** (`#sky`) to choose stars, deep-sky objects and planets, **Driv
   - **Hold** and **Park**;
   - target card and the **Choose target…** dialog (RA/Dec or az/el).
 - **Centre:**
-  - widefield finder panel (a GigE camera with its own lens; placeholder until there is one);
+  - widefield finder panel (`mount-svc widefield`, a GigE camera with its own lens): live view,
+    exposure, gain, format, Capture frame (FITS on the Pi), and **Solve**. Solve plate-solves
+    the next frame and shows where it points (RA/Dec, az/el), the mount's pointing error there
+    (solved minus where the mount believed it pointed), roll, pixel scale, and stars matched.
+    The head shows the field of view;
   - C8 camera panel: the camera on the C8, which the active imaging profile names
     (`camera_service`), so switching the header's Imaging profile switches the panel:
   - D500 (`dslr`, served by `mount-svc dslr`): live view (click
@@ -180,6 +185,25 @@ fitted to ERFA's full transformation and is good to ~20″ (annual aberration is
 rotation); tracking always uses the full ERFA path. Catalogue data: `gui/vendor/sky`
 (`tools/build_skydata.py`; HYG, OpenNGC and d3-celestial, licences in
 `gui/vendor/sky/LICENSES.md`).
+
+## The Pointing model screen (`#pointing`)
+
+A pointing run in mount-svc (svc/README.md, "Pointing model"), through the gateway's
+`pointing` op, polled once a second while the screen is open:
+
+- **Pointing run:** model (Site refit: IA, IE, AN and AW; Full model: every term), number of
+  points (10 or 40 by default), Both sides (full model: some points past the zenith), Start
+  run / Abort, and Apply / Discard once a fit is ready. The widefield camera service must be
+  running.
+- **Pointing errors:** a sky plot (north up, east left) of the points: pending (ring), in
+  progress, solved, failed (red), outlier (orange); squares are past the zenith. Arrows show
+  where the camera really pointed relative to where the mount believed, before the fit (the
+  model in use during the run) or after it, with a scale bar.
+- **Model:** each term's active value, this run's value and its 1σ (or "kept" in a site
+  refit), RMS before → after, fit notes (terms dropped as not significant or not constrained,
+  outliers), the active model's version and file, and the history of applied models.
+- **Points:** az/el, side, state, stars matched, error before and residual after, and why a
+  point failed.
 
 ## The Drives screen (`#drives`)
 

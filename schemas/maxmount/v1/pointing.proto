@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Pointing model runs (mount-svc): svc/pointing, query PointingRequest -> PointingReply.
+// A run slews to points spread over the sky, plate-solves a widefield frame at each, fits the
+// pointing model (pointfit.py) and offers it to apply. Angles in degrees, errors in arcsec.
+syntax = "proto3";
+
+package maxmount.v1;
+
+message PointingRunStart {
+  string mode = 1;              // "site": IA IE AN AW only (others kept) | "full": every term
+  int32 points = 2;             // 0: the preset's default (site 10, full 40)
+  double settle_s = 3;          // 0: configured
+  bool flipped = 4;             // include points past the zenith (full mode default: yes)
+}
+
+message PointingRequest {
+  oneof op {
+    PointingRunStart start = 1;
+    bool abort = 2;
+    bool status = 3;
+    bool apply = 4;             // the run's fit becomes the active model (mount-svc uses it from the next target)
+    bool discard = 5;           // forget the run's fit
+  }
+}
+
+message PointingPoint {
+  int32 index = 1;
+  double az_deg = 2;            // planned (sky)
+  double el_deg = 3;
+  bool flipped = 4;
+  string state = 5;             // pending | slewing | settling | solving | solved | failed
+  string message = 6;
+  int64 t_ns = 7;               // mid-exposure
+  double enc_az_deg = 8;        // encoder axis angles (mechanical)
+  double enc_el_deg = 9;
+  double ra_deg = 10;           // solved (ICRS)
+  double dec_deg = 11;
+  double obs_az_deg = 12;       // solved, observed az/el
+  double obs_el_deg = 13;
+  double before_xel_arcsec = 14;  // pointing error with the model in use during the run
+  double before_el_arcsec = 15;
+  double after_xel_arcsec = 16;   // residual after the fit
+  double after_el_arcsec = 17;
+  bool rejected = 18;           // an outlier, not used in the fit
+  int32 matched = 19;
+  double solve_rms_arcsec = 20;
+}
+
+message PointingTerm {
+  string name = 1;
+  double value_arcsec = 2;
+  double sigma_arcsec = 3;      // 0 when kept, not fitted
+  bool fitted = 4;
+}
+
+message PointingModelInfo {
+  string version = 1;
+  string date = 2;
+  string mode = 3;
+  int32 points = 4;
+  double rms_arcsec = 5;
+  double rms_before_arcsec = 6;
+  repeated PointingTerm terms = 7;
+  bool active = 8;
+  string path = 9;
+}
+
+message PointingStatus {
+  int64 t_ns = 1;
+  string state = 2;             // idle | running | done | aborted | error
+  string message = 3;
+  string mode = 4;
+  repeated PointingPoint points = 5;
+  PointingModelInfo fit = 6;    // the run's fit (state done), not yet applied
+  repeated string notes = 7;    // fit notes: terms dropped, outliers
+  PointingModelInfo current = 8;  // the active model
+  repeated PointingModelInfo history = 9;
+  bool applied = 10;            // the run's fit has been applied
+}
+
+message PointingReply {
+  bool ok = 1;
+  string message = 2;
+  PointingStatus status = 3;
+}

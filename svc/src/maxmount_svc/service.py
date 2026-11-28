@@ -25,7 +25,7 @@ from concurrent.futures import Future
 
 import numpy as np
 
-from . import adsb, clock, closedloop, planner, skyframe, tracker
+from . import adsb, clock, closedloop, planner, pointfit, pointrun, skyframe, tracker
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .planner import NS, Plan
@@ -80,7 +80,8 @@ class MountService:
             raise ValueError("mount-svc serve needs a site (system file `site:` section)")
         self.settings = settings
         self.client = client
-        self.model = model or PointingModel.load(settings.pointing_file)
+        self.model = model or pointfit.load_model(settings)
+        self.pointing = pointrun.PointingRun(self)
         self._requests: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._closing = threading.Event()
@@ -125,9 +126,11 @@ class MountService:
         self._decls += [
             s.declare_queryable(self.client.key("svc/target"), self._on_target_query),
             s.declare_queryable(self.client.key("svc/passes"), self._on_passes_query),
+            s.declare_queryable(self.client.key("svc/pointing"), self._on_pointing_query),
             s.declare_subscriber(self.client.key(f"camera/{self.settings.closed_loop.camera}/centroid"), self._on_centroid),
             self._status_pub,
         ]
+        self.pointing.start_listening()
         for fn in (self._request_loop, self._status_loop, self._loop_run):
             t = threading.Thread(target=fn, daemon=True, name=fn.__name__)
             t.start()
@@ -136,6 +139,7 @@ class MountService:
 
     def close(self, disable: bool = True) -> None:
         self._closing.set()
+        self.pointing._abort.set()
         with self._lock:
             control, worker = self._control, self._worker
         if control:
@@ -172,6 +176,16 @@ class MountService:
         except Exception as e:  # noqa: BLE001
             reply = mpb.PassesReply(ok=False, message=f"{type(e).__name__}: {e}")
         query.reply(self.client.key("svc/passes"), reply.SerializeToString())
+
+    def _on_pointing_query(self, query) -> None:
+        try:
+            req = mpb.PointingRequest()
+            req.ParseFromString(query.payload.to_bytes() if query.payload is not None else b"")
+            reply = self.pointing.handle(req)
+        except Exception as e:  # noqa: BLE001
+            log.exception("pointing request failed")
+            reply = mpb.PointingReply(ok=False, message=f"{type(e).__name__}: {e}")
+        query.reply(self.client.key("svc/pointing"), reply.SerializeToString())
 
     # -- request thread ----------------------------------------------------------------------
     def _request_loop(self) -> None:
@@ -346,7 +360,9 @@ class MountService:
         target = FixedTarget(a.az_deg * DEG, a.el_deg * DEG, name=a.name or f"az {a.az_deg:.2f} el {a.el_deg:.2f}")
         t0 = time.time_ns() + 2 * NS
         hold = a.hold_s if a.hold_s > 0 else 12 * 3600
-        best, plans = self._make_plan(target, t0, t0 + int(hold * NS), ("normal",), step_s=10.0)
+        if a.mode not in ("", "normal", "flipped"):
+            raise Rejected(f"alt-az mode must be normal or flipped, not '{a.mode}'")
+        best, plans = self._make_plan(target, t0, t0 + int(hold * NS), (a.mode or "normal",), step_s=10.0)
         if best is None:
             raise Rejected(_rejection(plans))
         return target, "altaz", best, a.hold_s > 0

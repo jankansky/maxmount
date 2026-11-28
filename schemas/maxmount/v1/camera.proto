@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Camera services (Zenoh keys maxmount/<site>/camera/<id>/...; id "dslr" for the Nikon D500,
-// "zwo" for the ZWO camera on the C8):
+// "zwo" for the ZWO camera on the C8, "widefield" for the GigE finder camera):
 //   camera/<id>/status   CameraStatus, about once a second and on every change
 //   camera/<id>/frame    CameraFrame: live view frames, and the preview of each capture
 //   camera/<id>/cmd      queryable: CameraCommand -> CameraReply
@@ -75,6 +75,54 @@ message CameraStatus {
   double track_speed = 45;      // across the sensor, binned px/s
   int64 roi_moves = 46;
   bool roi_centered = 47;       // the ROI is at the sensor's centre (not moved by tracking)
+  // Plate solving (widefield): the last solve, and the camera's field.
+  PlateSolution solution = 48;
+  double fov_w_deg = 49;
+  double fov_h_deg = 50;
+  double arcsec_per_px = 51;     // configured (a solve measures it: solution.arcsec_per_px)
+  bool solving = 52;
+}
+
+// Where a frame points on the sky, from a plate solve, and where the mount believed it pointed.
+message PlateSolution {
+  int64 t_ns = 1;               // mid-exposure, UTC
+  bool ok = 2;
+  string message = 3;
+  double ra_deg = 4;            // ICRS J2000, the image centre
+  double dec_deg = 5;
+  double roll_deg = 6;          // position angle of the image's up direction, N through E
+  double arcsec_per_px = 7;
+  bool mirrored = 8;
+  int32 stars = 9;              // detected
+  int32 matched = 10;
+  double rms_arcsec = 11;
+  double solve_s = 12;
+  string solver = 13;           // builtin | astap
+  bool has_mount = 14;          // mount telemetry at mid-exposure was available
+  double enc_az_deg = 15;       // encoder (actual) axis angles at mid-exposure, mechanical
+  double enc_el_deg = 16;
+  double cmd_az_deg = 17;       // commanded axis angles then
+  double cmd_el_deg = 18;
+  double az_deg = 19;           // the solved centre, observed (refracted) az/el
+  double el_deg = 20;
+  double mount_az_deg = 21;     // where the mount believed it pointed: encoders through the active pointing model
+  double mount_el_deg = 22;
+  double mount_ra_deg = 23;
+  double mount_dec_deg = 24;
+  double err_xel_arcsec = 25;   // solved minus believed, on the sky (az * cos el, el)
+  double err_el_arcsec = 26;
+  double exposure_s = 27;
+  double temperature_c = 28;    // site conditions used for refraction
+  double pressure_hpa = 29;
+  string id = 30;               // the Solve request's id
+}
+
+// Plate-solve the next frame (widefield): the reply comes at once, the result in the status
+// (solution, with the request's id). search_radius_deg: how far from the mount's position to
+// look (0: configured).
+message Solve {
+  double search_radius_deg = 1;
+  string id = 2;
 }
 
 message SetCameraSetting {
@@ -114,6 +162,7 @@ message CameraCommand {
     bool abort = 6;             // end a bulb exposure early
     Record record = 7;
     RoiTrack roi_track = 8;
+    Solve solve = 9;
   }
 }
 

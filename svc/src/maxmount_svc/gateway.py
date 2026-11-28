@@ -21,8 +21,10 @@ WebSocket messages (JSON):
           aircraft {max_range_km, show, selected} (local ADS-B receiver: list, map, sky, the selected one's path),
           set_imaging {profile} (the active narrow-field imaging profile; broadcast as {"type": "imaging"}),
           camera {camera_id, set {name, value} | capture {bulb_s} | liveview | save_to | stretch | abort
-                  | record {on, duration_s, max_frames} | roi_track {on, x, y, recenter}}
+                  | record {on, duration_s, max_frames} | roi_track {on, x, y, recenter} | solve {search_radius_deg}}
             (to camera/<id>/cmd; status arrives as {"type": "camera"}, frames as {"type": "camframe"}),
+          pointing {op: start {mode, points, settle_s, flipped} | abort | apply | discard | status}
+            (pointing model runs, svc/pointing in mount-svc; data: the run's status),
           conjunction_detail {cat1, cat2, primary, tca_ns} (both paths, separation, the pass to track),
           enable/disable {axis} and fault_reset (straight to mount-rt),
           jog {axis, by_deg | to_deg + absolute, vel_deg_s, acc_deg_s2} (through mount-svc)
@@ -311,6 +313,8 @@ class Gateway:
             cmd.roi_track.recenter = bool(r.get("recenter", False))
             if r.get("x") is not None and r.get("y") is not None:
                 cmd.roi_track.has_pick, cmd.roi_track.pick_x, cmd.roi_track.pick_y = True, float(r["x"]), float(r["y"])
+        elif "solve" in args:
+            cmd.solve.search_radius_deg = float((args["solve"] or {}).get("search_radius_deg") or 0)
         elif "record" in args:
             r = args["record"] or {}
             cmd.record.on = bool(r.get("on", True))
@@ -492,6 +496,9 @@ class Gateway:
             "tle_groups": list(TLE_GROUPS),
             "axes": s.axes_info,
             "fieldbus": {k: s.fieldbus.get(k) for k in ("backend", "interface", "cycle_us")},
+            "widefield": {"fov_deg": list(s.widefield.fov_deg), "arcsec_per_px": s.widefield.arcsec_per_px,
+                          "focal_mm": s.widefield.focal_mm, "pixel_um": s.widefield.pixel_um,
+                          "width": s.widefield.width, "height": s.widefield.height},
         }
 
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
@@ -586,6 +593,8 @@ class Gateway:
             return True, f"imaging profile: {p.name} ({p.arcsec_per_px:.2f}\"/px)", msg
         if op == "aircraft":
             return self._aircraft(args)
+        if op == "pointing":
+            return self._pointing(args)
         if op == "conjunctions":
             return self._conjunctions(args)
         if op == "conjunction_detail":
@@ -597,6 +606,27 @@ class Gateway:
         if op.startswith("sky_"):
             return self.sky.handle(op, args)
         return False, f"unknown op '{op}'", None
+
+    def _pointing(self, args: dict):
+        """Pointing model runs in mount-svc (svc/pointing): op start {mode, points, settle_s,
+        flipped} | abort | apply | discard | status; the reply's data is the run's status."""
+        what = str(args.get("op") or "status")
+        req = mpb.PointingRequest()
+        if what == "start":
+            req.start.mode = str(args.get("mode") or "site")
+            req.start.points = int(args.get("points") or 0)
+            req.start.settle_s = float(args.get("settle_s") or 0)
+            req.start.flipped = bool(args.get("flipped", False))
+        elif what in ("abort", "apply", "discard", "status"):
+            setattr(req, what, True)
+        else:
+            return False, f"unknown pointing op '{what}'", None
+        out = self.client.query("svc/pointing", req.SerializeToString(), timeout=10)
+        if out is None:
+            return False, "no reply from mount-svc (is 'mount-svc serve' running?)", None
+        r = mpb.PointingReply()
+        r.ParseFromString(out)
+        return r.ok, r.message, _msg_to_dict(r.status)
 
     def _passes(self, args: dict):
         """Upcoming passes, sorted by AOS.

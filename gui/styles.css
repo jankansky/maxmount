@@ -231,7 +231,7 @@ label.imaging select { max-width: 330px; }
 .chartbar .check { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .chartbar .check input { min-height: 0; accent-color: var(--accent); }
 .btn.small { min-height: 30px; font-size: 12px; }
-.skyside { flex: 1 1 400px; max-width: 480px; min-width: 300px; display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 140px); min-height: 420px; }
+.skyside { flex: 1 1 420px; max-width: 520px; min-width: 300px; display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 140px); min-height: 420px; }
 .skyside .tonight { flex: 1 1 0; min-height: 200px; }
 .skyside .tonight .tablewrap { flex: 1 1 0; min-height: 80px; overflow: auto; }
 .skyside .results { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
@@ -245,4 +245,21 @@ label.imaging select { max-width: 330px; }
 .skyside .toolbar { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12px; }
 .kv .warn { color: var(--warn); }
 .skyside .tonight td, .skyside .tonight th { white-space: nowrap; padding-left: 3px; padding-right: 3px; }
-.skyside .tonight td.obj { font-family: inherit; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.skyside .tonight td.obj { font-family: inherit; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Widefield finder (Track screen) */
+.camview.wf { aspect-ratio: 16 / 10; }
+.widefield .solution { display: flex; flex-direction: column; gap: 2px; min-height: 3.6em; overflow-wrap: anywhere; }
+.widefield .solution .warn, .pointing .warn { color: var(--warn); }
+
+/* Pointing model screen */
+.pointing { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.pt-row { display: grid; grid-template-columns: minmax(280px, 460px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.pt-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (max-width: 900px) { .pt-row { grid-template-columns: 1fr; } }
+.pointing .seg button { min-height: 28px; }
+.pointing th.num, .pointing td.num { text-align: right; }
+.pointing th.nocase { text-transform: none; }
+.pointing [aria-label='Pointing points'] .tablewrap { max-height: 50vh; overflow-y: auto; }
+.pointing [aria-label='Pointing points'] thead th { position: sticky; top: 0; background: var(--panel); }
+.pointing .tablewrap tbody tr { cursor: default; }
