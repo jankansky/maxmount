@@ -25,7 +25,7 @@ from concurrent.futures import Future
 
 import numpy as np
 
-from . import adsb, clock, closedloop, planner, tracker
+from . import adsb, clock, closedloop, planner, skyframe, tracker
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .planner import NS, Plan
@@ -217,9 +217,19 @@ class MountService:
             return None
 
     def _plan_track_radec(self, r, _allow_clock):
-        site, tr = self.settings.site, self.settings.tracking
+        return self._plan_fixed_sky(self._sidereal(r), r.duration_s, "radec")
+
+    def _plan_track_body(self, b, _allow_clock):
+        try:
+            target = skyframe.BodyTarget(self.settings.site, b.body.strip().lower(), b.name)
+        except ValueError as e:
+            raise Rejected(str(e)) from None
+        return self._plan_fixed_sky(target, b.duration_s, "body")
+
+    def _sidereal(self, r) -> SiderealTarget:
+        site = self.settings.site
         dec = r.dec_deg * DEG
-        target = SiderealTarget(
+        return SiderealTarget(
             site,
             r.ra_deg * DEG,
             dec,
@@ -229,18 +239,23 @@ class MountService:
             rv_km_s=r.radial_velocity_km_s,
             name=r.name or f"RA {r.ra_deg:.4f} Dec {r.dec_deg:+.4f}",
         )
+
+    def _plan_fixed_sky(self, target, duration_s: float, kind: str):
+        """A star or a solar-system body: tracked from now while it is above the horizon mask
+        (at most duration_s, at most 8 h)."""
+        tr = self.settings.tracking
         t0 = time.time_ns() + 2 * NS
         up = planner.find_passes(target, t0, t0 + 24 * 3600 * NS, tr.horizon_min_el_deg * DEG, step_s=60)
         if not up or up[0].rise_ns > t0 + 60 * NS:
             raise Rejected(f"{target.name} is below the {tr.horizon_min_el_deg:.0f} deg horizon")
         end = up[0].set_ns - 30 * NS
-        if r.duration_s > 0:
-            end = min(end, t0 + int(r.duration_s * NS))
+        if duration_s > 0:
+            end = min(end, t0 + int(duration_s * NS))
         end = min(end, t0 + 8 * 3600 * NS)
         best, plans = self._make_plan(target, t0, end, ("normal", "flipped"), step_s=1.0)
         if best is None:
             raise Rejected(_rejection(plans))
-        return target, "radec", best, True
+        return target, kind, best, True
 
     def _plan_track_tle(self, t, allow_clock_error: bool):
         site, tr = self.settings.site, self.settings.tracking

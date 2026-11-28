@@ -6,6 +6,7 @@ import { connect } from './lib/ws.js';
 import { drawStrip, drawSky, drawMap, drawHist, cssVar } from './lib/charts.js';
 import { pad, dms, hms, utc, dur, loadPref, savePref } from './lib/util.js';
 import { DrivesScreen } from './drives.js';
+import { SkyChartScreen } from './skychart.js';
 
 
 const STATE = {
@@ -49,9 +50,9 @@ const fmtMag = (p) => (p.peak_mag == null ? null : `${p.mag_estimated ? '≈' : 
 const fmtAng = (a) => (a >= 60 ? `${(a / 60).toFixed(1)}′` : `${a < 10 ? Number(a).toFixed(1) : Math.round(a)}″`);
 const fmtSize = (p) => (p.ang_size_arcsec == null ? null : `${p.size_estimated ? '≈' : ''}${fmtAng(p.ang_size_arcsec)}`);
 const LIGHT_OPTS = [['any', 'any'], ['sunlit', 'sunlit'], ['dark_sky', 'sunlit, dark sky']];
-const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives']];
+const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['sky', 'Sky chart'], ['drives', 'Drives']];
 const screenFromHash = () => { const h = location.hash.slice(1); return SCREENS.some(([id]) => id === h) ? h : 'track'; };
-const LATER = ['Objects', 'Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
+const LATER = ['Sequences', 'Recordings', 'Calibration', 'Pointing model', 'Setup'];
 
 // The active narrow-field imaging profile (system file `imaging:`), from hello / 'imaging' messages.
 const activeProfile = (im) => im?.profiles?.find((p) => p.key === im.active) || null;
@@ -1245,6 +1246,10 @@ function App() {
     <${Header} theme=${theme} setTheme=${setTheme} line=${line} status=${status} tel=${tel} hello=${hello} connected=${connected}
       imaging=${imaging} send=${send}
       screen=${screen} setScreen=${setScreen} />
+    <div class="sky-screen" hidden=${screen !== 'sky'}>
+      <${SkyChartScreen} active=${screen === 'sky' && connected} hello=${hello} tel=${tel} status=${status}
+        profile=${activeProfile(imaging)} send=${send} ask=${ask} />
+    </div>
     <div class="layout" hidden=${screen !== 'drives'}>
       <${DrivesScreen} tel=${tel} hello=${hello} status=${status} send=${send}
         history=${history.current} now=${now} events=${events.current} faults=${faults.current} />

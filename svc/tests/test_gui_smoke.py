@@ -625,3 +625,82 @@ def test_track_screen_sky_and_ground(adsb_file, gui_url, tmp_path):
         page.screenshot(path=os.environ.get("MAXMOUNT_SHOT", str(tmp_path / "track-aircraft.png")))
         browser.close()
     assert not errors, errors
+
+
+def test_sky_chart(gui_url, tmp_path):
+    """Sky chart: the catalogue and the gateway's sky requests load, search selects an object
+    and shows its details, a click on the chart selects, Go to & track sends a star to mount-svc,
+    and both orientations and both themes draw without errors."""
+    shots = os.environ.get("MAXMOUNT_SHOT_DIR", str(tmp_path))
+    errors = []
+    with playwright.sync_playwright() as pw:
+        try:
+            browser = pw.chromium.launch()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no Chromium for Playwright: {e}")
+        page = browser.new_page(viewport={"width": 1600, "height": 1000})
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.goto(gui_url + "#sky")
+        chart = page.locator("[aria-label='Sky chart'] canvas")
+        assert chart.is_visible()
+        tonight = page.locator("[aria-label=Tonight]")
+        tonight.get_by_text("objects above").wait_for(timeout=20000)
+        page.wait_for_timeout(1500)  # catalogue loaded, first frame drawn
+        page.screenshot(path=f"{shots}/sky-horizon-dark.png")
+
+        find = page.get_by_label("Find an object")
+        results = page.get_by_role("listbox", name="Search results").get_by_role("option")
+        find.fill("M 31")
+        results.first.wait_for(timeout=5000)
+        results.first.click()
+        sel = page.locator("[aria-label='Selected object']")
+        sel.get_by_text("Andromeda Galaxy").wait_for(timeout=5000)
+        sel.get_by_text("Highest").wait_for(timeout=10000)
+        assert "galaxy in Andromeda" in sel.text_content()
+
+        # Equatorial, centred on M 31: a click in the middle of the chart selects it again.
+        page.get_by_role("button", name="Equatorial").click()
+        sel.get_by_role("button", name="Centre").click()
+        page.wait_for_timeout(1500)
+        sel.get_by_role("button", name="clear").click()
+        sel.get_by_text("Click an object").wait_for(timeout=5000)
+        box = chart.bounding_box()
+        chart.click(position={"x": box["width"] / 2, "y": box["height"] / 2})
+        sel.get_by_text("Andromeda Galaxy").wait_for(timeout=5000)
+        for _ in range(4):
+            chart.hover(position={"x": box["width"] / 2, "y": box["height"] / 2})
+            page.mouse.wheel(0, -400)
+            page.wait_for_timeout(100)
+        page.wait_for_timeout(1200)
+        page.screenshot(path=f"{shots}/sky-m31-equatorial.png")
+
+        # Polaris is circumpolar at the simulated site and far from the Sun at any hour.
+        find.fill("Polaris")
+        results.first.click()
+        sel.get_by_text("circumpolar").wait_for(timeout=10000)
+        sel.get_by_role("button", name="Go to & track").click()
+        sel.get_by_role("status").get_by_text("plan for Polaris").wait_for(timeout=30000)
+
+        # The Moon (drawn with its phase), wherever it is.
+        find.fill("moon")
+        results.first.click()
+        sel.get_by_text("% lit").wait_for(timeout=5000)
+        sel.get_by_role("button", name="Centre").click()
+        assert "Size" in sel.text_content() and "—" not in sel.locator(".kv").text_content().split("Size")[1][:3]
+        page.get_by_role("checkbox", name="Ground").uncheck()
+        for _ in range(3):
+            chart.hover(position={"x": box["width"] / 2, "y": box["height"] / 2})
+            page.mouse.wheel(0, -500)
+            page.wait_for_timeout(100)
+        page.wait_for_timeout(1200)
+        page.screenshot(path=f"{shots}/sky-moon.png")
+        page.get_by_role("checkbox", name="Ground").check()
+
+        page.get_by_role("button", name="Horizon").click()
+        page.get_by_role("button", name="Red").click()
+        page.wait_for_timeout(1500)
+        page.screenshot(path=f"{shots}/sky-horizon-red.png")
+        page.get_by_role("button", name="Dark").click()
+        browser.close()
+    assert not errors, errors

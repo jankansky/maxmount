@@ -25,7 +25,7 @@ The header is shared by every screen:
 - **Dark / Red** theme switch, remembered by the browser.
 
 Screens: **Passes** (`#passes`) to choose a satellite pass, **Track** (the default) to follow
-it, **Drives** (`#drives`).
+it, **Sky chart** (`#sky`) to choose stars, deep-sky objects and planets, **Drives** (`#drives`).
 
 ## The Passes screen (`#passes`)
 
@@ -144,6 +144,42 @@ it, **Drives** (`#drives`).
     gateway's `aircraft` request every 2 s while the Track screen is open);
   - target telemetry (rates, range, range rate, altitude, TLE age);
   - strip charts with grid lines: following error, and loop wake-up latency.
+
+## The Sky chart screen (`#sky`)
+
+A planetarium view for choosing astrophotography targets (`skychart.js`).
+
+- **Chart:** stereographic projection; drag to pan, wheel or pinch to zoom (0.5°–200° field,
+  about the pointer), double-click to zoom in, arrow keys and +/− when the chart has focus,
+  Escape clears the selection. **Horizon** (zenith up, the default) or **Equatorial** (north
+  up, east left). Toggles: constellations, deep sky, labels, ground (below the horizon, with
+  the horizon-mask band and its dashed line), alt-az grid, RA/Dec grid, star colours (B−V).
+  Stars are shown to mag 5 at the widest field and to mag 8 zoomed in; deep-sky objects use
+  type symbols (galaxies as ellipses at their size and position angle, open clusters dashed,
+  globulars crossed, nebulae as squares, planetary nebulae ringed). The Sun, the Moon (with
+  its phase) and the planets come from the gateway. Overlays: the mount (ring), the active
+  imaging profile's field around it (aligned with altitude/azimuth: there is no rotator), the
+  widefield finder's field when `hello.widefield.fov_deg` is present, the target (diamond).
+- **Find:** stars by name or Bayer/Flamsteed designation (Vega, α Lyr, HIP 91262), deep-sky
+  objects by Messier/NGC/IC number or common name (M 31, NGC 7000, Orion Nebula), planets.
+- **Selected:** type, constellation, magnitude, size, RA/Dec (J2000; for planets and the
+  Moon, topocentric now), altitude/azimuth now, rise/set above the horizon mask and the
+  highest point in the next 24 h, and how much of the imaging field it fills (or how many
+  frames a mosaic needs). **Go to & track** sends stars and deep-sky objects as RA/Dec (with
+  proper motion) and planets and the Moon as `track_body`, which mount-svc follows from the
+  ERFA ephemeris.
+- **Tonight:** deep-sky objects and planets above an altitude for at least half an hour in
+  the coming dark period (Sun below −12°), filtered by type, magnitude and size relative to
+  the imaging field; sorted by highest altitude, size, brightness or best time. Click a row to
+  select it on the chart.
+
+Gateway requests: `sky_frame` (once a second while the screen is open: the ICRS → east/
+north/up rotation, refraction constants and the solar system), `sky_search`, `sky_object`,
+`sky_tonight` (`svc/src/maxmount_svc/skyops.py`, astronomy in `skyframe.py`). The rotation is
+fitted to ERFA's full transformation and is good to ~20″ (annual aberration is not a
+rotation); tracking always uses the full ERFA path. Catalogue data: `gui/vendor/sky`
+(`tools/build_skydata.py`; HYG, OpenNGC and d3-celestial, licences in
+`gui/vendor/sky/LICENSES.md`).
 
 ## The Drives screen (`#drives`)
 

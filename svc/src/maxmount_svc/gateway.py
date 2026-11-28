@@ -45,6 +45,7 @@ from aiohttp import WSMsgType, web
 from google.protobuf import json_format
 
 from . import adsb, astro, kinematics, planner, satcat, socrates
+from .skyops import SkyOps
 from .config import SystemSettings
 from .mount import MountClient, MountError
 from .proto import mpb
@@ -203,6 +204,7 @@ class Gateway:
         self.satcat = satcat.SatCatalog()
         self.socrates = socrates.Socrates()
         self.adsb = adsb.AdsbSource(settings.adsb.source)
+        self.sky = SkyOps(settings)  # Sky chart screen: sky_frame, sky_search, sky_object, sky_tonight
         self.clients: set[web.WebSocketResponse] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.client: MountClient | None = None
@@ -592,6 +594,8 @@ class Gateway:
             return self._pass_plan(args)
         if op == "pass_preview":
             return self._pass_preview(args)
+        if op.startswith("sky_"):
+            return self.sky.handle(op, args)
         return False, f"unknown op '{op}'", None
 
     def _passes(self, args: dict):

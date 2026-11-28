@@ -58,6 +58,13 @@ message TrackAircraft {
   double duration_s = 2;        // 0 = until it drops below the horizon mask or adsb.max_track_s
 }
 
+// A solar-system body, tracked from the gateway-independent ERFA ephemeris (skyframe.py).
+message SolarSystemBody {
+  string body = 1;              // sun, moon, mercury, venus, mars, jupiter, saturn, uranus, neptune
+  string name = 2;
+  double duration_s = 3;        // 0 = until it sets (at most 8 h)
+}
+
 message JogAxis {
   string axis = 1;
   double by_deg = 2;            // relative move, or
@@ -93,6 +100,7 @@ message TargetCommand {
     ClosedLoop closed_loop = 8;
     CalibrateCamera calibrate_camera = 9;
     Offsets add_offsets = 11;   // added to the current offsets (hand buttons while the loop runs)
+    SolarSystemBody track_body = 12;
   }
   bool allow_clock_error = 10;  // satellites: track even if chrony's error bound is too large
 }

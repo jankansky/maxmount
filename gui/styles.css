@@ -213,3 +213,36 @@ label.imaging select { max-width: 330px; }
 .camstack > .panel.centroid { flex: 1 1 auto; }
 .fillchart { position: relative; flex: 1 1 0; min-height: 140px; }
 .fillchart canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+/* Sky chart screen (#sky, skychart.js) */
+:root, [data-theme="dark"] {
+  --const: rgba(79,168,216,0.30); --const-label: rgba(120,160,200,0.45); --star-label: #9aa8b8; --ground-chart: rgba(16,13,9,0.93);
+  --dso-gal: #d9837a; --dso-neb: #6fc49a; --dso-cl: #d8c06a; --dso-pn: #69c7c9; --moon-dark: #24282e;
+}
+[data-theme="red"] {
+  --const: rgba(170,40,30,0.45); --const-label: rgba(190,50,40,0.6); --star-label: #b23a2f; --ground-chart: rgba(16,2,1,0.94);
+  --dso-gal: #d9483c; --dso-neb: #b8382d; --dso-cl: #e0574a; --dso-pn: #c4473a; --moon-dark: #1c0303;
+}
+.skychart { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px; align-items: stretch; }
+.skychart .chartpanel { flex: 999 1 600px; min-width: 0; height: calc(100vh - 140px); min-height: 420px; padding: 0; overflow: hidden; gap: 0; }
+.skychart .chartpanel canvas { flex: 1 1 0; min-height: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; outline: none; border-radius: 10px 10px 0 0; }
+.skychart .chartpanel canvas:active { cursor: grabbing; }
+.chartbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 10px; border-top: 1px solid var(--line); }
+.chartbar .check { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.chartbar .check input { min-height: 0; accent-color: var(--accent); }
+.btn.small { min-height: 30px; font-size: 12px; }
+.skyside { flex: 1 1 400px; max-width: 480px; min-width: 300px; display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 140px); min-height: 420px; }
+.skyside .tonight { flex: 1 1 0; min-height: 200px; }
+.skyside .tonight .tablewrap { flex: 1 1 0; min-height: 80px; overflow: auto; }
+.skyside .results { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.skyside .results li { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid var(--line); font-size: 12px; }
+.skyside .results li:hover, .skyside .results li:focus { background: var(--row-lit); outline: none; }
+.selname { font-size: 16px; font-weight: 600; }
+.linkbtn { border: 0; background: none; color: var(--accent); padding: 0; font-size: 12px; }
+.typechips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chipbtn { border: 1px solid var(--line); background: var(--bg); color: var(--muted); border-radius: 12px; padding: 3px 9px; font-size: 11px; }
+.chipbtn.on { background: var(--chip); color: var(--text); border-color: var(--accent); }
+.skyside .toolbar { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12px; }
+.kv .warn { color: var(--warn); }
+.skyside .tonight td, .skyside .tonight th { white-space: nowrap; padding-left: 3px; padding-right: 3px; }
+.skyside .tonight td.obj { font-family: inherit; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
