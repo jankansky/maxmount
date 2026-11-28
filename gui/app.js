@@ -733,7 +733,7 @@ function Passes({ hello, send, status, connected, preview, setPreview, updatePre
             : (lighting !== 'any' ? 'Try Lighting: any, or a longer window. ' : '') + 'Watch takes names or parts of names from the group (e.g. ISS, HUBBLE, NOAA 19) or catalog numbers (25544), comma separated.'}</span>`}</td></tr>`}
         ${rows.map((p) => {
           const chosen = p.chosen || {};
-          const current = status?.tle_line1 && status.tle_line1 === p.line1 && status?.plan?.start_ns && Number(status.plan.start_ns) >= Number(p.rise_ns) - 5e9 && Number(status.plan.start_ns) <= Number(p.set_ns);
+          const current = isTrackedPass(status, p);
           const plan = p.planned === false ? html`<span class="muted" title="select the pass to plan it">—</span>`
             : chosen.mode ? (chosen.mode === 'over_the_top' ? html`<span class="warn">over-top ${Number(chosen.max_error_deg).toFixed(1)}°</span>` : chosen.mode)
             : html`<span class="warn" title=${(p.plans || []).map((x) => x.mode + ': ' + (x.problems || []).join(', ')).join('\n')}>no plan fits</span>`;
@@ -1026,7 +1026,16 @@ function useTrackedAircraft(ask, status, active) {
 }
 
 // Passes screen: large ground track and sky views of the selected pass (or the live target).
+// True when the live track is this pass (same TLE, plan starting within the pass).
+function isTrackedPass(status, p) {
+  return !!(p && status?.tle_line1 && status.tle_line1 === p.line1 && status?.plan?.start_ns
+    && Number(status.plan.start_ns) >= Number(p.rise_ns) - 5e9 && Number(status.plan.start_ns) <= Number(p.set_ns));
+}
+
 function PassViews({ status, tel, hello, track, land, preview, air }) {
+  // The tracking plan, target and Sun are "now": shown with no preview, or when the preview is
+  // the pass being tracked, but not over some other (future) pass.
+  const live = !preview || isTrackedPass(status, preview.row);
   const mapRef = useRef(null), skyRef = useRef(null);
   useEffect(() => {
     if (air) {
@@ -1050,10 +1059,10 @@ function PassViews({ status, tel, hello, track, land, preview, air }) {
     if (mapRef.current) drawMap(mapRef.current, { land, track: preview?.ground || (status?.tle_line1 ? track : null), now: when });
     if (skyRef.current) drawSky(skyRef.current, {
       maskEl: hello?.tracking?.horizon_min_el_deg ?? 10,
-      path: (status?.path || []).map((p) => [Number(p.az_deg), Number(p.el_deg)]),
-      target: status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
+      path: live ? (status?.path || []).map((p) => [Number(p.az_deg), Number(p.el_deg)]) : [],
+      target: live && status?.target_name ? [Number(status.target_az_deg), Number(status.target_el_deg)] : null,
       mount: tel?.sky ? [tel.sky.az_deg, tel.sky.el_deg] : null,
-      sun: tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
+      sun: live && tel?.sun ? [tel.sun.az_deg, tel.sun.el_deg] : null,
       preview: preview?.sky || null,
       preview2: preview?.sky2 || null,
       mark: preview?.tca_azel || null,
@@ -1072,7 +1081,7 @@ function PassViews({ status, tel, hello, track, land, preview, air }) {
     <section class="panel" aria-label="Sky">
       <div class="head"><h2>Sky</h2></div>
       <canvas ref=${skyRef} role="img" aria-label="Sky dome: pass path, mount, target, horizon mask"></canvas>
-      <span class="small">${air ? 'North up, east left · dots: aircraft now · selected: the next 10 min if it flies straight · dashed: tracking plan · ring: mount' : html`North up, east left · selected pass: solid where sunlit, dotted in shadow${conj ? ' · thin: the other object · ✕: closest approach' : ''} · dashed: tracking plan · ring: mount`}</span>
+      <span class="small">${air ? 'North up, east left · dots: aircraft now · selected: the next 10 min if it flies straight · dashed: tracking plan · ring: mount' : html`North up, east left · selected pass: solid where sunlit, dotted in shadow${conj ? ' · thin: the other object · ✕: closest approach' : ''}${live ? ' · dashed: tracking plan · dot: Sun now' : ''} · ring: mount`}</span>
     </section></div>`;
 }
 
