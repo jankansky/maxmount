@@ -390,9 +390,24 @@ def test_dslr_panel(gui_url, served, tmp_path, engine):  # noqa: F811
             panel.locator("img[alt='live view']").wait_for(timeout=10000)
             assert "LIVE" in panel.locator(".tag").text_content()
             image_fits()
-            panel.locator(".camview").click()  # zoom for focus
+            # Zoom on the clicked point (upper left), drag pans, a plain click zooms out.
+            view, img_sel = panel.locator(".camview"), "[aria-label='C8 camera'] .camview img"
+            b = view.bounding_box()
+            view.click(position={"x": b["width"] * 0.25, "y": b["height"] * 0.25})
             assert "3×" in panel.locator(".tag").text_content()
-            panel.locator(".camview").click()
+            shift = lambda: page.evaluate(f"() => {{ const m = new DOMMatrix(getComputedStyle(document.querySelector(\"{img_sel}\")).transform); return [m.e, m.f]; }}")
+            tx, ty = shift()  # the clicked point (-w/4, -h/4 from the centre) moves to the centre
+            assert tx == pytest.approx(3 * b["width"] / 4, abs=4) and ty == pytest.approx(3 * b["height"] / 4, abs=4), (tx, ty, b)
+            cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+            page.mouse.move(cx, cy)
+            page.mouse.down()
+            page.mouse.move(cx - 30, cy - 20, steps=5)
+            page.mouse.up()
+            tx2, ty2 = shift()
+            assert tx2 == pytest.approx(tx - 30, abs=4) and ty2 == pytest.approx(ty - 20, abs=4), (tx, ty, tx2, ty2)
+            assert "3×" in panel.locator(".tag").text_content()  # a drag does not zoom out
+            view.click()
+            assert "3×" not in panel.locator(".tag").text_content()
             panel.get_by_role("button", name="Live view on").click()
             panel.get_by_label("ISO").select_option("400")
             page.wait_for_function("() => document.querySelector(\"[aria-label='C8 camera'] select[aria-label=ISO]\").value === '400'", timeout=10000)

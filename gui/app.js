@@ -51,7 +51,7 @@ const fmtMag = (p) => (p.peak_mag == null ? null : `${p.mag_estimated ? '≈' : 
 const fmtAng = (a) => (a >= 60 ? `${(a / 60).toFixed(1)}′` : `${a < 10 ? Number(a).toFixed(1) : Math.round(a)}″`);
 const fmtSize = (p) => (p.ang_size_arcsec == null ? null : `${p.size_estimated ? '≈' : ''}${fmtAng(p.ang_size_arcsec)}`);
 const LIGHT_OPTS = [['any', 'any'], ['sunlit', 'sunlit'], ['dark_sky', 'sunlit, dark sky']];
-const SCREENS = [['passes', 'Passes'], ['track', 'Track'], ['sky', 'Sky chart'], ['drives', 'Drives'], ['pointing', 'Pointing model']];
+const SCREENS = [['sky', 'Sky chart'], ['passes', 'Passes'], ['track', 'Track'], ['drives', 'Drives'], ['pointing', 'Pointing model']];
 const screenFromHash = () => { const h = location.hash.slice(1); return SCREENS.some(([id]) => id === h) ? h : 'track'; };
 const LATER = ['Sequences', 'Recordings', 'Calibration', 'Setup'];
 
@@ -197,11 +197,55 @@ function TargetDialog({ dialogRef, send }) {
   </dialog>`;
 }
 
+// Camera image zoom: a click zooms 3x on the clicked point; while zoomed, drag (mouse,
+// touchpad click-drag or touch) or scroll (two-finger touchpad swipe) pans, and a click
+// without a drag zooms back out. Returns the zoom flag, the props for the .camview box and
+// the style for its <img>. enabled=false: plain clicks go to onPlainClick (e.g. target pick).
+const ZOOM = 3;
+function useZoomPan(enabled = true, onPlainClick = null) {
+  const [z, setZ] = useState(null);      // null, or {dx, dy}: focus point, px from the box centre
+  const drag = useRef(null);
+  const zoom = enabled && !!z;
+  const clamp = (box, dx, dy) => {
+    const b = box.getBoundingClientRect(), hx = b.width / 2 * (1 - 1 / ZOOM), hy = b.height / 2 * (1 - 1 / ZOOM);
+    return { dx: Math.max(-hx, Math.min(hx, dx)), dy: Math.max(-hy, Math.min(hy, dy)) };
+  };
+  const onPointerDown = (e) => {
+    if (e.button !== 0) return;
+    drag.current = { x: e.clientX, y: e.clientY, moved: 0, z0: z };
+    if (zoom) e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e) => {
+    const d = drag.current;
+    if (!d || !zoom || !d.z0) return;
+    const mx = e.clientX - d.x, my = e.clientY - d.y;
+    d.moved = Math.max(d.moved, Math.hypot(mx, my));
+    if (d.moved > 4) setZ(clamp(e.currentTarget, d.z0.dx - mx / ZOOM, d.z0.dy - my / ZOOM));
+  };
+  const onPointerUp = (e) => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d || d.moved > 4) return;
+    if (!enabled) { onPlainClick?.(e); return; }
+    if (zoom) { setZ(null); return; }
+    const b = e.currentTarget.getBoundingClientRect();
+    setZ(clamp(e.currentTarget, e.clientX - b.left - b.width / 2, e.clientY - b.top - b.height / 2));
+  };
+  const onWheel = (e) => {
+    if (!zoom || e.ctrlKey) return;      // ctrl+wheel is the browser's pinch-zoom
+    e.preventDefault();
+    setZ(clamp(e.currentTarget, z.dx + e.deltaX / ZOOM, z.dy + e.deltaY / ZOOM));
+  };
+  const box = { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: () => { drag.current = null; }, onWheel };
+  const img = zoom ? `transform: translate(${-ZOOM * z.dx}px, ${-ZOOM * z.dy}px) scale(${ZOOM})` : '';
+  return { zoom, box, img, reset: () => setZ(null) };
+}
+
 // Nikon D500 (or another stills camera) served by `mount-svc dslr`: live view, settings,
 // capture, and the last capture with its histogram. cam: the camera's status message;
 // frames: { live, capture } latest frames.
 function DslrPanel({ cam, frames, send, now }) {
-  const [zoom, setZoom] = useState(false);
+  const { zoom, box, img } = useZoomPan();
   const [bulb, setBulb] = useState(loadPref('dslr_bulb', 30));
   const histRef = useRef(null);
   const live = cam?.liveview && frames?.live;
@@ -233,8 +277,8 @@ function DslrPanel({ cam, frames, send, now }) {
   return html`<section class="panel camera wide dslr" aria-label="C8 camera">
     <div class="head"><h2>C8 · ${cam.model || 'Nikon D500'}</h2>
       <span class="small mono">${cam.connected ? `${cam.state}${cam.battery_percent >= 0 ? ` · battery ${cam.battery_percent}%` : ''}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
-    <div class=${'camview img' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre (focus)" onClick=${() => setZoom(!zoom)}>
-      ${shown ? html`<img alt=${live ? 'live view' : 'last capture'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
+    <div class=${'camview img' + (zoom ? ' zoom' : '')} title=${zoom ? 'drag to pan · click to zoom out' : 'click: 3× zoom there (focus)'} ...${box}>
+      ${shown ? html`<img alt=${live ? 'live view' : 'last capture'} style=${img} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
         : html`<span>${cam.connected ? 'Turn on live view, or capture a frame.' : cam.message}</span>`}
       ${shown && html`<span class="tag">${live ? 'LIVE' : `last capture${shown.exposure_s ? ` · ${shown.exposure_s} s` : ''}${shown.iso ? ` · ISO ${shown.iso}` : ''}`}${zoom ? ' · 3×' : ''}</span>`}
     </div>
@@ -335,7 +379,8 @@ function SensorMap({ cam }) {
 // ZWO camera on the C8 (`mount-svc zwo`): video with ROI, exposure, gain, offset, format, bin
 // and USB bandwidth; Capture saves one frame as FITS on the Pi; Record saves SER video.
 function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
-  const [zoom, setZoom] = useState(false);
+  const pickRef = useRef(null);
+  const { zoom, box, img, reset: unzoom } = useZoomPan(!(cam?.roi_tracking && cam?.liveview && frames?.live), (e) => pickRef.current?.(e));
   const histRef = useRef(null);
   const live = cam?.liveview && frames?.live;
   const shown = live ? frames.live : frames?.capture;
@@ -360,9 +405,8 @@ function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
   const roi = cam.roi?.length === 4 ? `${cam.roi[2]}×${cam.roi[3]}` : '';
   const temp = Number.isFinite(cam.temperature_c) ? ` · ${Number(cam.temperature_c).toFixed(1)} °C` : '';
   const tracking = !!cam.roi_tracking;
-  // Click on the live image: pick the target while tracking, else zoom (focus).
-  const onImage = (e) => {
-    if (!(tracking && live)) { setZoom(!zoom); return; }
+  // Click on the live image while tracking: pick the target (otherwise it zooms, useZoomPan).
+  pickRef.current = (e) => {
     const img = e.currentTarget.querySelector('img');
     if (!img || !shown.width) return;
     const b = img.getBoundingClientRect();
@@ -378,9 +422,9 @@ function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
   return html`<section class="panel camera wide zwo" aria-label="C8 camera">
     <div class="head"><h2>${title}</h2>
       <span class="small mono">${cam.recording ? html`<span class="recdot">● REC</span> ` : ''}${cam.connected ? `${cam.state}${cam.liveview ? ` · ${Number(cam.fps).toFixed(1)} fps` : ''}${Number(cam.dropped) ? ` · ${cam.dropped} dropped` : ''}${temp}` : 'not connected'}${cam.simulated ? ' · simulated' : ''}</span></div>
-    <div class=${'camview img' + (zoom && !(tracking && live) ? ' zoom' : '') + (tracking && live ? ' pick' : '')}
-      title=${tracking && live ? 'click the target to track it' : 'click: 3× zoom on the centre'} onClick=${onImage}>
-      ${shown ? html`<img alt=${live ? 'live view' : 'last frame'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
+    <div class=${'camview img' + (zoom ? ' zoom' : '') + (tracking && live ? ' pick' : '')}
+      title=${tracking && live ? 'click the target to track it' : zoom ? 'drag to pan · click to zoom out' : 'click: 3× zoom there'} ...${box}>
+      ${shown ? html`<img alt=${live ? 'live view' : 'last frame'} style=${img} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
         : html`<span>${cam.connected ? 'Start video, or capture a frame.' : cam.message}${cam.connected ? '' : hint}</span>`}
       ${live && !zoom && html`<${TrackOverlay} frame=${shown} />`}
       ${shown && html`<span class="tag">${live ? `LIVE · ${roi}` : `last frame · ${shown.exposure_s * 1000} ms · gain ${shown.gain} · ${shown.bit_depth}-bit`}${zoom ? ' · 3×' : ''}</span>`}
@@ -400,7 +444,7 @@ function ZwoPanel({ cam, frames, send, profile, dslrRunning }) {
     <div class="toolbar track">
       <button class=${'btn' + (tracking ? ' on' : '')} aria-pressed=${tracking} disabled=${off}
         title="Move the ROI across the sensor to keep the target centred (turns video on). While on, click the image to pick the target."
-        onClick=${() => { setZoom(false); cmd({ roi_track: { on: !tracking } }); }}>${tracking ? 'Tracking ROI' : 'Track ROI'}</button>
+        onClick=${() => { unzoom(); cmd({ roi_track: { on: !tracking } }); }}>${tracking ? 'Tracking ROI' : 'Track ROI'}</button>
       <button class="btn" disabled=${off || cam.roi_centered} onClick=${() => cmd({ roi_track: { on: false, recenter: true } })}
         title="Stop ROI tracking and put the ROI back at the sensor's centre">Center ROI</button>
       <${SensorMap} cam=${cam} />
@@ -441,7 +485,7 @@ function CameraPanel({ title, info, square, label, children }) {
 // Widefield finder (`mount-svc widefield`): live view, exposure, gain, format, FITS frames;
 // Solve plate-solves the next frame: where it points, and the mount's pointing error there.
 function WidefieldPanel({ cam, frames, send, hello }) {
-  const [zoom, setZoom] = useState(false);
+  const { zoom, box, img } = useZoomPan();
   const wf = hello?.widefield;
   const fov = cam?.fov_w_deg ? [cam.fov_w_deg, cam.fov_h_deg] : wf?.fov_deg;
   const scale = Number(cam?.arcsec_per_px || wf?.arcsec_per_px);
@@ -470,12 +514,12 @@ function WidefieldPanel({ cam, frames, send, hello }) {
   return html`<section class="panel camera wide widefield" aria-label="Widefield camera">
     <div class="head"><h2>Widefield finder</h2>
       <span class="small mono">${cam.connected ? `${cam.state}${cam.liveview ? ` · ${Number(cam.fps).toFixed(1)} fps` : ''}` : 'not connected'}${cam.simulated ? ' · simulated' : ''} · ${info}</span></div>
-    <div class=${'camview img wf' + (zoom ? ' zoom' : '')} title="click: 3× zoom on the centre" onClick=${() => setZoom(!zoom)}>
-      ${shown ? html`<img alt=${live ? 'widefield live view' : 'widefield frame'} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
+    <div class=${'camview img wf' + (zoom ? ' zoom' : '')} title=${zoom ? 'drag to pan · click to zoom out' : 'click: 3× zoom there'} ...${box}>
+      ${shown ? html`<img alt=${live ? 'widefield live view' : 'widefield frame'} style=${img} src=${`data:image/jpeg;base64,${shown.jpeg}`} />`
         : html`<span>${cam.connected ? 'Start live view, or Solve to take and solve one frame.' : cam.message}</span>`}
-      ${shown && html`<svg viewBox="0 0 100 62.5" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      ${shown && !zoom && html`<svg viewBox="0 0 100 62.5" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <g stroke="var(--accent)" stroke-width="0.25" opacity="0.8"><line x1="46" y1="31.25" x2="54" y2="31.25"></line><line x1="50" y1="27.25" x2="50" y2="35.25"></line></g></svg>`}
-      ${shown && html`<span class="tag">${live ? 'LIVE' : 'last frame'}</span>`}
+      ${shown && html`<span class="tag">${live ? 'LIVE' : 'last frame'}${zoom ? ' · 3×' : ''}</span>`}
     </div>
     <div class="toolbar">
       <button class=${'btn' + (cam.liveview ? ' on' : '')} aria-pressed=${!!cam.liveview} disabled=${off}

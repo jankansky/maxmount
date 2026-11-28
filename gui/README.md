@@ -116,8 +116,11 @@ it, **Sky chart** (`#sky`) to choose stars, deep-sky objects and planets, **Driv
     The head shows the field of view;
   - C8 camera panel: the camera on the C8, which the active imaging profile names
     (`camera_service`), so switching the header's Imaging profile switches the panel:
-  - D500 (`dslr`, served by `mount-svc dslr`): live view (click
-    the image for a 3× centre zoom to focus), ISO, shutter speed or a bulb time, image
+  - Camera images (D500, ZWO, widefield): click to zoom 3× on the point clicked (to focus);
+    while zoomed, drag (mouse, touchpad click-drag, touch) or two-finger scroll pans, and a
+    click without a drag zooms back out. While ZWO ROI tracking runs, a click picks the target
+    instead.
+  - D500 (`dslr`, served by `mount-svc dslr`): live view, ISO, shutter speed or a bulb time, image
     quality, where to save (camera card, Pi, or both), auto-stretch, Capture (Abort during a
     bulb exposure), and the last capture with its histogram, median, 99th percentile,
     saturated fraction and file names. In the red theme camera images are shown in red only;
